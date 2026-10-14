@@ -1,0 +1,44 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+*.env
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+.pytest_cache/
+
+# Recordings and temporary video/mocap outputs
+recordings/
+uploads/
+test_output/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.log
+
+# Generated SSL keys/certificates for smartphone streaming
+*.pem
+*.key
+cert.pem
+key.pem
+
+# OS and Editor specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Blender autosaves and backup files
+*.blend1
+*.blend2
+@eaDir/

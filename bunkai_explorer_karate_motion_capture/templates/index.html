@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bunkai MoCap Live — Захват движений карате & Живой Аватар</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+  <!-- Header Bar -->
+  <header>
+    <div class="logo">
+      <span class="logo-title">Bunkai MoCap Live</span>
+      <span class="logo-badge">Real-Time Karate</span>
+    </div>
+
+    <div class="header-controls">
+      <button id="btn-webcam" class="active" title="Включить веб-камеру ноутбука">
+        <span>🔴</span> Веб-камера ноутбука
+      </button>
+      <button id="btn-sample" title="Переключить на тестовое видео карате">
+        <span>🥋</span> Образец видео
+      </button>
+      <button id="btn-upload" title="Загрузить свой видеофайл">
+        <span>📁</span> Загрузить видео...
+      </button>
+      <input type="file" id="file-upload-input" accept="video/mp4,video/mov,video/avi,video/webm">
+
+      <button id="btn-calibrate" title="Калибровать нейтральную позу (голова прямо, взгляд вперед) [Клавиша C]">
+        <span>🎯</span> Калибровать
+      </button>
+      <button id="btn-pause" title="Поставить воспроизведение на паузу">
+        ⏸ Пауза
+      </button>
+      <button id="btn-record" class="record-btn" title="Записать текущую сессию в JSON">
+        ⏺ Начать запись
+      </button>
+    </div>
+  </header>
+
+  <!-- Split Screen View -->
+  <div id="main-container">
+    <!-- Left: Video & MediaPipe Stream -->
+    <div class="panel panel-left">
+      <div class="panel-header">
+        <span>Камера / Видео (MediaPipe Pose 3D)</span>
+        <span id="hud-fps" style="color: #38ef7d; font-family: monospace;">FPS: 0.0</span>
+      </div>
+
+      <div class="video-wrapper">
+        <img id="video-stream" src="/video_feed" alt="Видеотрансляция">
+
+        <div class="video-overlay-hud">
+          <div class="hud-pill">
+            <span class="dot-status" id="status-dot"></span>
+            <span id="status-text">Инициализация захвата...</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="control-bar">
+        <div class="control-group">
+          <label class="control-item">
+            <input type="checkbox" id="check-mirror" checked>
+            <span>Зеркало</span>
+          </label>
+          <label class="control-item">
+            <input type="checkbox" id="check-fists" checked>
+            <span>Кулаки</span>
+          </label>
+        </div>
+
+        <div class="control-group">
+          <div class="slider-group">
+            <span style="color: #94a3b8;">Фильтр:</span>
+            <input type="range" id="smooth-slider" min="0" max="0.8" step="0.05" value="0.45">
+            <span id="smooth-val" style="width: 28px; text-align: right; font-family: monospace;">0.45</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: 3D Dojo Viewport -->
+    <div class="panel panel-right">
+      <div class="panel-header">
+        <span>3D Аватар Каратека (Karateka_Armature)</span>
+        <div style="display: flex; gap: 8px;">
+          <label class="control-item" style="font-weight: normal; font-size: 11px;">
+            <input type="checkbox" id="check-skeleton">
+            <span>Кости</span>
+          </label>
+          <label class="control-item" style="font-weight: normal; font-size: 11px;">
+            <input type="checkbox" id="check-wireframe">
+            <span>Сетка</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="viewport-3d">
+        <!-- Floating Camera & Pose Controls -->
+        <div class="viewport-overlay">
+          <button id="btn-cam-front" title="Вид спереди">Спереди</button>
+          <button id="btn-cam-34" title="Вид 3/4">3/4</button>
+          <button id="btn-cam-side" title="Вид сбоку">Сбоку</button>
+          <button id="btn-calibrate-vp" title="Калибровать нейтральную осанку (голова прямо, взгляд вперед)" style="background: rgba(46, 213, 115, 0.85); font-weight: bold;">🎯 Калибровать</button>
+          <button id="btn-reset-pose" title="Сбросить в исходную T-позу" style="background: rgba(87, 96, 111, 0.85);">T-Pose</button>
+        </div>
+
+        <!-- Live Telemetry Pill -->
+        <div class="telemetry-overlay">
+          <div class="telemetry-row">
+            <span>Статус:</span>
+            <span class="telemetry-val" id="telem-status" style="color: #38ef7d;">Подключение...</span>
+          </div>
+          <div class="telemetry-row">
+            <span>Частота кадров:</span>
+            <span class="telemetry-val" id="telem-fps">-</span>
+          </div>
+          <div class="telemetry-row">
+            <span>Управление:</span>
+            <span class="telemetry-val" id="telem-bones">-</span>
+          </div>
+          <div class="telemetry-row" style="margin-top: 4px; font-size: 10px; color: #64748b;">
+            <span>Управление камерой: ЛКМ вращение, Колесико зум, ПКМ панорама</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading Modal -->
+  <div id="loading-modal" class="loading-modal">
+    <div class="spinner"></div>
+    <div id="loading-text" style="font-size: 16px; font-weight: 700;">Загрузка 3D модели Каратека...</div>
+  </div>
+
+  <script src="/static/js/avatar_viewer.js"></script>
+</body>
+</html>

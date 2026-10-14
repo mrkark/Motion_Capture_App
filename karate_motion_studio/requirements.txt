@@ -1,0 +1,6 @@
+# Karate Motion Studio Dependencies
+PyQt6>=6.6.0,<=6.11.0
+PyQt6-WebEngine>=6.6.0,<=6.11.0
+opencv-python>=4.8.0
+mediapipe>=0.10.14
+numpy>=1.24.0,<2.0.0

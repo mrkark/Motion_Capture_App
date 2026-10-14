@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Karate Motion Studio 3D Viewport</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #16171a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+    
+    /* Overlay HUD */
+    .hud-controls {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      display: flex;
+      gap: 6px;
+      z-index: 100;
+    }
+    .hud-btn {
+      background: rgba(30, 31, 35, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #dfdfe0;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+      transition: all 0.15s ease;
+    }
+    .hud-btn:hover {
+      background: rgba(50, 52, 58, 0.95);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+    .hud-btn.active {
+      background: #e05260;
+      color: #fff;
+      border-color: #e05260;
+    }
+
+    .telemetry {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      background: rgba(20, 21, 24, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #8c939e;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: monospace;
+      pointer-events: none;
+      z-index: 100;
+    }
+    .telemetry span { color: #38ef7d; }
+  </style>
+  <script src="js/three.min.js"></script>
+  <script src="js/OrbitControls.js"></script>
+  <script src="js/GLTFLoader.js"></script>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <!-- Camera Presets -->
+  <div class="hud-controls">
+    <button class="hud-btn" id="btn-front" onclick="setCamera('front')">Спереди</button>
+    <button class="hud-btn active" id="btn-34" onclick="setCamera('34')">3/4</button>
+    <button class="hud-btn" id="btn-side" onclick="setCamera('side')">Сбоку</button>
+    <button class="hud-btn" id="btn-back" onclick="setCamera('back')">Сзади</button>
+    <button class="hud-btn" id="btn-mirror" onclick="toggleMirrorAvatar()" title="Переключить прямой или зеркальный режим">🎯 Прямой (без отзеркаливания)</button>
+    <button class="hud-btn" id="btn-head" onclick="calibrateHead()" title="Выровнять уровень взгляда и осанки головы (Metsuke)">🎯 Взгляд (Metsuke)</button>
+    <button class="hud-btn" id="btn-tpose" onclick="resetPose()">T-Pose</button>
+  </div>
+
+  <div class="telemetry">
+    Режим: <span id="telem-mode">Аватар + Скелет</span> | FPS: <span id="telem-fps">60</span>
+  </div>
+
+  <script>
+    // --- THREE.JS SCENE SETUP ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x16171a);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(2.0, 1.4, 2.8);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.target.set(0, 0.95, 0);
+
+    // Dojo Tatami Floor & Lights
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x2b2f3a, 0.9);
+    hemiLight.position.set(0, 20, 0);
+    scene.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.3);
+    dirLight.position.set(3, 7, 4);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
+    scene.add(dirLight);
+
+    const rimLight = new THREE.DirectionalLight(0x70a1ff, 0.45);
+    rimLight.position.set(-3, 4, -2.5);
+    scene.add(rimLight);
+
+    const grid = new THREE.GridHelper(6, 24, 0xe05260, 0x282b33);
+    grid.position.y = 0;
+    scene.add(grid);
+
+    // --- SKELETON 3D LAYER (NEUTRAL TEST AVATAR) ---
+    const skeletonGroup = new THREE.Group();
+    skeletonGroup.position.set(0, 0.9, 0); // Position at avatar hip height
+    scene.add(skeletonGroup);
+
+    const jointSpheres = {};
+    const boneCylinders = [];
+
+    const sphereGeom = new THREE.SphereGeometry(0.024, 12, 12);
+    const jointMatTorso = new THREE.MeshStandardMaterial({ color: 0xff3b57, roughness: 0.3 });
+    const jointMatLeft  = new THREE.MeshStandardMaterial({ color: 0x00d2d3, roughness: 0.3 });
+    const jointMatRight = new THREE.MeshStandardMaterial({ color: 0xff9f43, roughness: 0.3 });
+    const jointMatHead  = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
+    const boneMat       = new THREE.MeshStandardMaterial({ color: 0x57606f, roughness: 0.5 });
+
+    const SKELETON_BONES = [
+      ["left_shoulder", "right_shoulder"],
+      ["left_shoulder", "left_hip"],
+      ["right_shoulder", "right_hip"],
+      ["left_hip", "right_hip"],
+      ["left_shoulder", "left_elbow"],
+      ["left_elbow", "left_wrist"],
+      ["right_shoulder", "right_elbow"],
+      ["right_elbow", "right_wrist"],
+      ["left_hip", "left_knee"],
+      ["left_knee", "left_ankle"],
+      ["left_ankle", "left_heel"],
+      ["left_heel", "left_foot_index"],
+      ["left_ankle", "left_foot_index"],
+      ["right_hip", "right_knee"],
+      ["right_knee", "right_ankle"],
+      ["right_ankle", "right_heel"],
+      ["right_heel", "right_foot_index"],
+      ["right_ankle", "right_foot_index"],
+      ["nose", "left_ear"],
+      ["nose", "right_ear"]
+    ];
+
+    function createNeutralSkeleton() {
+      const allJoints = [
+        "nose", "left_ear", "right_ear", "left_shoulder", "right_shoulder",
+        "left_elbow", "right_elbow", "left_wrist", "right_wrist",
+        "left_hip", "right_hip", "left_knee", "right_knee",
+        "left_ankle", "right_ankle", "left_heel", "right_heel",
+        "left_foot_index", "right_foot_index"
+      ];
+
+      for (const j of allJoints) {
+        let mat = jointMatTorso;
+        if (j.startsWith("left")) mat = jointMatLeft;
+        else if (j.startsWith("right")) mat = jointMatRight;
+        else if (j === "nose") mat = jointMatHead;
+
+        const sphere = new THREE.Mesh(sphereGeom, mat);
+        sphere.castShadow = true;
+        skeletonGroup.add(sphere);
+        jointSpheres[j] = sphere;
+      }
+
+      const cylGeom = new THREE.CylinderGeometry(0.012, 0.012, 1, 8);
+      for (const [a, b] of SKELETON_BONES) {
+        const mesh = new THREE.Mesh(cylGeom, boneMat);
+        mesh.castShadow = true;
+        skeletonGroup.add(mesh);
+        boneCylinders.push({ mesh, a, b });
+      }
+    }
+    createNeutralSkeleton();
+
+    // --- GLB AVATAR (CUSTOM RIGGED MODEL) ---
+    let avatarModel = null;
+    let skeletonHelper = null;
+    const boneMap = {};
+    let isModelReady = false;
+
+    function getBone(name) {
+      if (!name) return null;
+      if (boneMap[name]) return boneMap[name];
+      const dotless = name.replace(/\./g, '');
+      if (boneMap[dotless]) return boneMap[dotless];
+      if (name.endsWith('L') && !name.includes('.')) {
+        const dotted = name.slice(0, -1) + '.L';
+        if (boneMap[dotted]) return boneMap[dotted];
+      } else if (name.endsWith('R') && !name.includes('.')) {
+        const dotted = name.slice(0, -1) + '.R';
+        if (boneMap[dotted]) return boneMap[dotted];
+      }
+      return null;
+    }
+
+    const gltfLoader = new THREE.GLTFLoader();
+
+    function loadModel(url) {
+      gltfLoader.load(url, (gltf) => {
+        if (avatarModel) scene.remove(avatarModel);
+        if (skeletonHelper) scene.remove(skeletonHelper);
+
+        avatarModel = gltf.scene;
+        scene.add(avatarModel);
+        avatarModel.updateMatrixWorld(true);
+
+        avatarModel.traverse((node) => {
+          if (node.isBone) {
+            const raw = node.name;
+            boneMap[raw] = node;
+            boneMap[raw.replace(/\./g, '')] = node;
+            if (raw.endsWith('L') && !raw.includes('.')) {
+              boneMap[raw.slice(0, -1) + '.L'] = node;
+            } else if (raw.endsWith('R') && !raw.includes('.')) {
+              boneMap[raw.slice(0, -1) + '.R'] = node;
+            } else if (raw.includes('.')) {
+              boneMap[raw.replace('.', '')] = node;
+            }
+
+            node.restLocalQ = node.quaternion.clone();
+            node.restWorldQ = new THREE.Quaternion();
+            node.getWorldQuaternion(node.restWorldQ);
+            node.restWorldDir = new THREE.Vector3(0, 1, 0).applyQuaternion(node.restWorldQ).normalize();
+          }
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+          }
+        });
+
+        skeletonHelper = new THREE.SkeletonHelper(avatarModel);
+        skeletonHelper.visible = (currentViewMode === "both" || currentViewMode === "skeleton");
+        scene.add(skeletonHelper);
+
+        skeletonGroup.visible = (currentViewMode === "both" || currentViewMode === "skeleton");
+        isModelReady = true;
+        console.log("Avatar model loaded successfully:", url);
+      }, undefined, (err) => {
+        console.warn("Custom GLB not loaded, using neutral test skeleton:", err);
+      });
+    }
+
+    // Attempt default model load
+    loadModel("./karateka_lowpoly.glb");
+
+    // --- KINEMATIC BONE ALIGNMENT ---
+    function alignBone(bone, targetDir, alpha = 0.85) {
+      if (!bone || !bone.restWorldDir || !targetDir || targetDir.lengthSq() < 1e-5) return;
+      const vFrom = bone.restWorldDir;
+      let vTo = targetDir.clone().normalize();
+      const dot = vFrom.dot(vTo);
+      // Singularity protection: prevent antiparallel gimbal flips when limbs cross the torso
+      if (dot < -0.92) {
+        vTo.z = Math.max(vTo.z, 0.35);
+        vTo.normalize();
+      }
+      const rotWorld = new THREE.Quaternion().setFromUnitVectors(vFrom, vTo);
+      const targetWorldQ = rotWorld.clone().multiply(bone.restWorldQ);
+      const parentWorldQ = new THREE.Quaternion();
+      if (bone.parent) bone.parent.getWorldQuaternion(parentWorldQ);
+      const targetLocalQ = parentWorldQ.clone().invert().multiply(targetWorldQ);
+      bone.quaternion.slerp(targetLocalQ, alpha);
+      bone.updateMatrixWorld(true);
+    }
+
+    // --- DYNAMIC CLAVICLE / SCAPULAR PROTRACTION (SHOULDER GIRDLE) ---
+    // Engages Shoulder.L and Shoulder.R to seat the humerus head naturally in the socket
+    // during forward strikes, punches, and cross-torso blocks, eliminating shoulder dislocation.
+    function alignShoulder(bone, vArm, sideKey = "R") {
+      if (!bone || !vArm || vArm.lengthSq() < 1e-4) return;
+      const uArm = vArm.clone().normalize();
+      const fwdReach = Math.max(0, uArm.z);
+      const elevate = Math.max(0, uArm.y);
+      let vClavicle = null;
+
+      if (sideKey === "R") {
+        const crossReach = Math.max(0, uArm.x); // crossing left (+X)
+        vClavicle = new THREE.Vector3(-1.0 + crossReach * 0.35, elevate * 0.25, fwdReach * 0.35 + crossReach * 0.25).normalize();
+      } else {
+        const crossReach = Math.max(0, -uArm.x); // crossing right (-X)
+        vClavicle = new THREE.Vector3(1.0 - crossReach * 0.35, elevate * 0.25, fwdReach * 0.35 + crossReach * 0.25).normalize();
+      }
+      alignBone(bone, vClavicle, 0.70);
+    }
+
+    // --- 3D PALM & WRIST ORIENTATION (PRONATION / SUPINATION / ROTATION) ---
+    // Smooth hand orientation memory to eliminate stationary palm jitter
+    const handOrientMemory = {
+      R: { fwd: null, norm: null },
+      L: { fwd: null, norm: null }
+    };
+
+    function alignHand(bone, targetFwd, targetNorm, sideKey = "R") {
+      if (!bone || !targetFwd || !targetNorm) return;
+      const mem = handOrientMemory[sideKey] || handOrientMemory.R;
+
+      let curFwd = targetFwd.clone().normalize();
+      let curNorm = targetNorm.clone().normalize();
+      if (curFwd.lengthSq() < 1e-4 || curNorm.lengthSq() < 1e-4) return;
+
+      if (!mem.fwd) {
+        mem.fwd = curFwd.clone();
+        mem.norm = curNorm.clone();
+      } else {
+        const angFwd = mem.fwd.angleTo(curFwd);
+        const angNorm = mem.norm.angleTo(curNorm);
+        const maxAng = Math.max(angFwd, angNorm);
+        // Adaptive smoothing: heavy filtering when still (< 4 deg), snappy when active
+        const alpha = maxAng > 0.18 ? 0.70 : (maxAng > 0.06 ? 0.35 : 0.18);
+        mem.fwd.lerp(curFwd, alpha).normalize();
+        mem.norm.lerp(curNorm, alpha).normalize();
+      }
+
+      const uy = mem.fwd.clone();
+      // Dorsal normal is opposite to outward palm normal
+      const dorsal = mem.norm.clone().negate().normalize();
+      // Gram-Schmidt orthogonalization: project dorsal onto plane perpendicular to uy
+      const dot = dorsal.dot(uy);
+      const uz = dorsal.clone().sub(uy.clone().multiplyScalar(dot)).normalize();
+      if (uz.lengthSq() < 1e-4) return;
+
+      // Local +X = Y x Z in right-handed coordinate frame
+      const ux = new THREE.Vector3().crossVectors(uy, uz).normalize();
+      if (ux.lengthSq() < 1e-4) return;
+
+      const basisMat = new THREE.Matrix4().makeBasis(ux, uy, uz);
+      const targetWorldQ = new THREE.Quaternion().setFromRotationMatrix(basisMat);
+
+      const parentWorldQ = new THREE.Quaternion();
+      if (bone.parent) bone.parent.getWorldQuaternion(parentWorldQ);
+      const targetLocalQ = parentWorldQ.clone().invert().multiply(targetWorldQ);
+
+      bone.quaternion.slerp(targetLocalQ, 0.65);
+      bone.updateMatrixWorld(true);
+    }
+
+    // --- 3D FOOT ORIENTATION (YAW HEADING, HEEL ELEVATION & STANCE ROTATION) ---
+    // Accurately replicates turning feet on the tatami (Zenkutsu, Kiba, Kokutsu dachi)
+    // with smooth heading memory to eliminate micro-jitter while remaining snappy on pivots.
+    const footOrientMemory = {
+      R: { yaw: null, pitch: null },
+      L: { yaw: null, pitch: null }
+    };
+
+    function alignFoot(bone, vFoot, sideKey = "R") {
+      if (!bone || !bone.restWorldQ || !vFoot || vFoot.lengthSq() < 1e-4) return;
+      const mem = footOrientMemory[sideKey] || footOrientMemory.R;
+
+      let curYaw = Math.atan2(vFoot.x, vFoot.z);
+      const lenXZ = Math.hypot(vFoot.x, vFoot.z);
+      let curPitch = Math.atan2(vFoot.y, Math.max(0.04, lenXZ));
+      // Anatomical pitch limit: don't allow foot to bend backwards through the shin
+      curPitch = Math.max(-0.85, Math.min(0.40, curPitch));
+
+      if (mem.yaw === null) {
+        mem.yaw = curYaw;
+        mem.pitch = curPitch;
+      } else {
+        // Handle angle wrap-around for yaw
+        let diffYaw = curYaw - mem.yaw;
+        while (diffYaw > Math.PI) diffYaw -= 2 * Math.PI;
+        while (diffYaw < -Math.PI) diffYaw += 2 * Math.PI;
+
+        const maxDiff = Math.max(Math.abs(diffYaw), Math.abs(curPitch - mem.pitch));
+        // Adaptive filter: smooth when holding stance, snappy when rotating foot
+        const alpha = maxDiff > 0.20 ? 0.75 : (maxDiff > 0.05 ? 0.40 : 0.20);
+        mem.yaw += diffYaw * alpha;
+        mem.pitch = mem.pitch * (1 - alpha) + curPitch * alpha;
+      }
+
+      const qYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), mem.yaw);
+      const qPitch = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -mem.pitch);
+      const qDeltaWorld = qYaw.multiply(qPitch);
+      const targetWorldQ = qDeltaWorld.multiply(bone.restWorldQ);
+
+      const parentWorldQ = new THREE.Quaternion();
+      if (bone.parent) bone.parent.getWorldQuaternion(parentWorldQ);
+      const targetLocalQ = parentWorldQ.clone().invert().multiply(targetWorldQ);
+
+      bone.quaternion.slerp(targetLocalQ, 0.75);
+      bone.updateMatrixWorld(true);
+    }
+
+    // Metsuke gaze trim offset (chin slightly up in traditional Shotokan posture)
+    let headPitchOffset = 0.05;
+    window.calibrateHead = function() {
+      headPitchOffset = 0.05;
+      const btn = document.getElementById('btn-head');
+      if (btn) {
+        btn.textContent = "🎯 Взгляд: Откалиброван";
+        setTimeout(() => { btn.textContent = "🎯 Взгляд (Metsuke)"; }, 1500);
+      }
+    };
+    window.adjustHeadPitch = function(delta) {
+      headPitchOffset += delta;
+    };
+
+    // Seated stance and continuous foot grounding solver
+    let seatedWeight = 0.0;
+    let smoothRootY = 0.0;
+    let smoothRootZ = 0.0;
+    let nominalLegLen = 0.82;
+
+    // View Modes: "avatar" (default), "both", "skeleton"
+    let currentViewMode = "avatar";
+    function setViewMode(mode) {
+      currentViewMode = mode;
+      document.getElementById('telem-mode').textContent =
+        mode === "avatar" ? "Аватар Karateka" : (mode === "skeleton" ? "Только скелет" : "Аватар + Скелет");
+
+      if (avatarModel) avatarModel.visible = (mode === "avatar" || mode === "both");
+      if (skeletonHelper) skeletonHelper.visible = (mode === "skeleton" || mode === "both");
+      skeletonGroup.visible = (mode === "skeleton" || mode === "both");
+    }
+
+    // Avatar Mirror Mode: false = Anatomical (user right -> avatar right), true = Mirror (reflective)
+    let mirrorAvatar = false;
+    window.toggleMirrorAvatar = function() {
+      window.setMirrorAvatar(!mirrorAvatar);
+    };
+    window.setMirrorAvatar = function(enabled) {
+      mirrorAvatar = !!enabled;
+      const btn = document.getElementById('btn-mirror');
+      if (btn) {
+        btn.textContent = mirrorAvatar ? "🪞 Зеркало: Вкл" : "🎯 Прямой (без отзеркаливания)";
+        btn.classList.toggle('active', mirrorAvatar);
+      }
+    };
+
+    // --- UPDATE POSE API (CALLED BY QT ENGINE) ---
+    window.updatePose = function(frameData) {
+      if (!frameData) return;
+
+      const pts = frameData.joints || {};
+      const vis = frameData.confidence || {};
+
+      // 1. Position skeleton group only when active
+      if (skeletonGroup.visible) {
+        if (frameData.rootPosition) {
+          skeletonGroup.position.set(
+            frameData.rootPosition[0],
+            frameData.rootPosition[1],
+            frameData.rootPosition[2]
+          );
+        } else {
+          skeletonGroup.position.set(0, 0.9, 0);
+        }
+
+        // Update Neutral 3D Skeleton
+        for (const [name, sphere] of Object.entries(jointSpheres)) {
+          if (pts[name]) {
+            sphere.position.set(pts[name][0], pts[name][1], pts[name][2]);
+            sphere.visible = true;
+          } else {
+            sphere.visible = false;
+          }
+        }
+
+        for (const { mesh, a, b } of boneCylinders) {
+          if (pts[a] && pts[b]) {
+            const pA = new THREE.Vector3(...pts[a]);
+            const pB = new THREE.Vector3(...pts[b]);
+            const dist = pA.distanceTo(pB);
+
+            mesh.position.copy(pA).add(pB).multiplyScalar(0.5);
+            mesh.scale.set(1, dist, 1);
+            mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), pB.clone().sub(pA).normalize());
+            mesh.visible = true;
+          } else {
+            mesh.visible = false;
+          }
+        }
+      }
+
+      // 2. Update Rigged Avatar
+      if (isModelReady && avatarModel) {
+        // Direct Kinematic Bone Alignment from 3D Landmark Positions
+        if (Object.keys(pts).length >= 4) {
+          const minConf = 0.08;
+          const conf = (name) => (vis[name] !== undefined ? vis[name] : 1.0);
+
+          // Spine: Mid Hip -> Mid Shoulder
+          if (pts["left_hip"] && pts["right_hip"] && pts["left_shoulder"] && pts["right_shoulder"]) {
+            const midHip = new THREE.Vector3(...pts["left_hip"]).add(new THREE.Vector3(...pts["right_hip"])).multiplyScalar(0.5);
+            const midSh = new THREE.Vector3(...pts["left_shoulder"]).add(new THREE.Vector3(...pts["right_shoulder"])).multiplyScalar(0.5);
+            const vSpine = midSh.clone().sub(midHip);
+            // Damp perspective forward slouch (parallax artifact from webcam) to keep karate Seichusen upright
+            vSpine.z *= 0.15;
+            if (Math.abs(vSpine.z) < 0.03) vSpine.z = 0.0;
+            alignBone(getBone("Spine"), vSpine, 0.75);
+          }
+
+          // Bone mapping: Anatomical vs Mirror
+          const shoulderNameR = mirrorAvatar ? "Shoulder.L" : "Shoulder.R";
+          const armNameR = mirrorAvatar ? "UpperArm.L" : "UpperArm.R";
+          const forearmNameR = mirrorAvatar ? "LowerArm.L" : "LowerArm.R";
+          const handNameR = mirrorAvatar ? "Hand.L" : "Hand.R";
+
+          const shoulderNameL = mirrorAvatar ? "Shoulder.R" : "Shoulder.L";
+          const armNameL = mirrorAvatar ? "UpperArm.R" : "UpperArm.L";
+          const forearmNameL = mirrorAvatar ? "LowerArm.R" : "LowerArm.L";
+          const handNameL = mirrorAvatar ? "Hand.R" : "Hand.L";
+
+          const legNameR = mirrorAvatar ? "UpperLeg.L" : "UpperLeg.R";
+          const shinNameR = mirrorAvatar ? "LowerLeg.L" : "LowerLeg.R";
+          const footNameR = mirrorAvatar ? "Foot.L" : "Foot.R";
+          const legNameL = mirrorAvatar ? "UpperLeg.R" : "UpperLeg.L";
+          const shinNameL = mirrorAvatar ? "LowerLeg.R" : "LowerLeg.L";
+          const footNameL = mirrorAvatar ? "Foot.R" : "Foot.L";
+
+          // Physical Right Arm & Shoulder Rotation
+          const bShoulderR = getBone(shoulderNameR);
+          const bUpperR = getBone(armNameR);
+          const bLowerR = getBone(forearmNameR);
+          const bHandR = getBone(handNameR);
+          const fDataR = frameData.fingers ? (mirrorAvatar ? frameData.fingers.left : frameData.fingers.right) : null;
+          if (pts["right_shoulder"] && pts["right_elbow"] && conf("right_shoulder") >= minConf && conf("right_elbow") >= minConf) {
+            const vArm = new THREE.Vector3(...pts["right_elbow"]).sub(new THREE.Vector3(...pts["right_shoulder"]));
+            if (mirrorAvatar) vArm.x = -vArm.x;
+
+            // Clavicle protraction seats shoulder joint naturally on reaches and crosses
+            if (bShoulderR) {
+              alignShoulder(bShoulderR, vArm, mirrorAvatar ? "L" : "R");
+            }
+
+            if (pts["right_wrist"] && conf("right_wrist") >= minConf) {
+              const vForearm = new THREE.Vector3(...pts["right_wrist"]).sub(new THREE.Vector3(...pts["right_elbow"]));
+              if (mirrorAvatar) vForearm.x = -vForearm.x;
+
+              alignBone(bUpperR, vArm, 0.75);
+              alignBone(bLowerR, vForearm, 0.75);
+            } else if (bLowerR) {
+              alignBone(bUpperR, vArm, 0.75);
+              alignBone(bLowerR, vArm, 0.40);
+            } else {
+              alignBone(bUpperR, vArm, 0.75);
+            }
+          } else {
+            if (bShoulderR && bShoulderR.restLocalQ) bShoulderR.quaternion.slerp(bShoulderR.restLocalQ, 0.08);
+            if (bUpperR && bUpperR.restLocalQ) bUpperR.quaternion.slerp(bUpperR.restLocalQ, 0.08);
+            if (bLowerR && bLowerR.restLocalQ) bLowerR.quaternion.slerp(bLowerR.restLocalQ, 0.08);
+          }
+
+          // Right Hand / Palm Orientation (Pronation, Supination, Strike angles)
+          if (bHandR) {
+            if (fDataR && fDataR.palm_normal && fDataR.hand_direction) {
+              const targetFwd = new THREE.Vector3(...fDataR.hand_direction);
+              const targetNorm = new THREE.Vector3(...fDataR.palm_normal);
+              if (mirrorAvatar) {
+                targetFwd.x = -targetFwd.x;
+                targetNorm.x = -targetNorm.x;
+              }
+              alignHand(bHandR, targetFwd, targetNorm, "R");
+            } else if (bHandR.restLocalQ) {
+              bHandR.quaternion.slerp(bHandR.restLocalQ, 0.08);
+            }
+          }
+
+          // Physical Left Arm & Shoulder Rotation
+          const bShoulderL = getBone(shoulderNameL);
+          const bUpperL = getBone(armNameL);
+          const bLowerL = getBone(forearmNameL);
+          const bHandL = getBone(handNameL);
+          const fDataL = frameData.fingers ? (mirrorAvatar ? frameData.fingers.right : frameData.fingers.left) : null;
+          if (pts["left_shoulder"] && pts["left_elbow"] && conf("left_shoulder") >= minConf && conf("left_elbow") >= minConf) {
+            const vArm = new THREE.Vector3(...pts["left_elbow"]).sub(new THREE.Vector3(...pts["left_shoulder"]));
+            if (mirrorAvatar) vArm.x = -vArm.x;
+
+            // Clavicle protraction seats shoulder joint naturally on reaches and crosses
+            if (bShoulderL) {
+              alignShoulder(bShoulderL, vArm, mirrorAvatar ? "R" : "L");
+            }
+
+            if (pts["left_wrist"] && conf("left_wrist") >= minConf) {
+              const vForearm = new THREE.Vector3(...pts["left_wrist"]).sub(new THREE.Vector3(...pts["left_elbow"]));
+              if (mirrorAvatar) vForearm.x = -vForearm.x;
+
+              alignBone(bUpperL, vArm, 0.75);
+              alignBone(bLowerL, vForearm, 0.75);
+            } else if (bLowerL) {
+              alignBone(bUpperL, vArm, 0.75);
+              alignBone(bLowerL, vArm, 0.40);
+            } else {
+              alignBone(bUpperL, vArm, 0.75);
+            }
+          } else {
+            if (bShoulderL && bShoulderL.restLocalQ) bShoulderL.quaternion.slerp(bShoulderL.restLocalQ, 0.08);
+            if (bUpperL && bUpperL.restLocalQ) bUpperL.quaternion.slerp(bUpperL.restLocalQ, 0.08);
+            if (bLowerL && bLowerL.restLocalQ) bLowerL.quaternion.slerp(bLowerL.restLocalQ, 0.08);
+          }
+
+          // Left Hand / Palm Orientation (Pronation, Supination, Strike angles)
+          if (bHandL) {
+            if (fDataL && fDataL.palm_normal && fDataL.hand_direction) {
+              const targetFwd = new THREE.Vector3(...fDataL.hand_direction);
+              const targetNorm = new THREE.Vector3(...fDataL.palm_normal);
+              if (mirrorAvatar) {
+                targetFwd.x = -targetFwd.x;
+                targetNorm.x = -targetNorm.x;
+              }
+              alignHand(bHandL, targetFwd, targetNorm, "L");
+            } else if (bHandL.restLocalQ) {
+              bHandL.quaternion.slerp(bHandL.restLocalQ, 0.08);
+            }
+          }
+
+          // Smart Supporting Foot Grounding & Squat Solver:
+          // In real life, feet remain on the floor (tatami ground).
+          // When squatting or sitting, legs compress vertically (hipY - footY shrinks).
+          // To keep feet planted without the avatar floating or legs pulling up towards hips ("прижимает ноги к себе"),
+          // the avatar's root Y descends continuously in exact sync with leg flexion.
+          const hasKneeR = pts["right_hip"] && pts["right_knee"] && conf("right_hip") >= minConf && conf("right_knee") >= minConf;
+          const hasAnkleR = pts["right_ankle"] && conf("right_ankle") >= minConf;
+          const hasKneeL = pts["left_hip"] && pts["left_knee"] && conf("left_hip") >= minConf && conf("left_knee") >= minConf;
+          const hasAnkleL = pts["left_ankle"] && conf("left_ankle") >= minConf;
+
+          // 1. Calculate vertical drop from hips to lowest supporting foot
+          let maxSupportDrop = 0.0;
+          if (pts["left_hip"] && pts["right_hip"]) {
+            const hipY = (pts["left_hip"][1] + pts["right_hip"][1]) * 0.5;
+            if (hasKneeL && (hasAnkleL || pts["left_heel"])) {
+              const footYL = (pts["left_heel"] && conf("left_heel") >= minConf) ? pts["left_heel"][1] : pts["left_ankle"][1];
+              const dropL = hipY - footYL;
+              if (dropL > maxSupportDrop) maxSupportDrop = dropL;
+            }
+            if (hasKneeR && (hasAnkleR || pts["right_heel"])) {
+              const footYR = (pts["right_heel"] && conf("right_heel") >= minConf) ? pts["right_heel"][1] : pts["right_ankle"][1];
+              const dropR = hipY - footYR;
+              if (dropR > maxSupportDrop) maxSupportDrop = dropR;
+            }
+          }
+
+          // Dynamically adapt nominal standing leg length when user stands tall
+          if (maxSupportDrop > 0.65 && maxSupportDrop < 1.15) {
+            if (maxSupportDrop > nominalLegLen) {
+              nominalLegLen = nominalLegLen * 0.90 + maxSupportDrop * 0.10;
+            }
+          }
+
+          // 2. Strict Chair Sitting Check (when user sits in a chair with both legs)
+          let isSitting = false;
+          if (hasKneeL && hasKneeR) {
+            const dyL = Math.abs(pts["left_hip"][1] - pts["left_knee"][1]);
+            const dyR = Math.abs(pts["right_hip"][1] - pts["right_knee"][1]);
+            const dzL = pts["left_knee"][2] - pts["left_hip"][2];
+            const dzR = pts["right_knee"][2] - pts["right_hip"][2];
+            const kneesLevel = Math.abs(pts["left_knee"][1] - pts["right_knee"][1]);
+            if (dyL < 0.22 && dzL > 0.15 && dyR < 0.22 && dzR > 0.15 && kneesLevel < 0.12) {
+              isSitting = true;
+            }
+          }
+
+          const targetSeated = isSitting ? 1.0 : 0.0;
+          seatedWeight = seatedWeight * 0.88 + targetSeated * 0.12;
+
+          // 3. Compute continuous root Y descent (feet stay firmly planted on the floor!)
+          let targetRootY = 0.0;
+          if (maxSupportDrop > 0.25) {
+            // Smooth continuous squat tracking: descends smoothly as knees bend!
+            const legCompression = maxSupportDrop - nominalLegLen;
+            if (legCompression < -0.03) {
+              targetRootY = Math.max(-0.62, legCompression + 0.03);
+            }
+          } else if (isSitting) {
+            targetRootY = -0.38 * seatedWeight;
+          }
+
+          // Hips push slightly backwards (-Z) during deep squat for physical balance
+          const targetRootZ = targetRootY * 0.25;
+
+          // Smooth EMA filtering for root translation
+          smoothRootY = smoothRootY * 0.80 + targetRootY * 0.20;
+          smoothRootZ = smoothRootZ * 0.80 + targetRootZ * 0.20;
+
+          if (avatarModel) {
+            avatarModel.position.y = smoothRootY;
+            avatarModel.position.z = smoothRootZ;
+          }
+
+          // Pure Kinematic Leg & Foot Solver: 100% faithful replication of individual limb motion
+          // Physical Right Leg & Foot
+          const bUpperLegR = getBone(legNameR);
+          const bLowerLegR = getBone(shinNameR);
+          const bFootR = getBone(footNameR);
+
+          if (hasKneeR) {
+            const vThigh = new THREE.Vector3(...pts["right_knee"]).sub(new THREE.Vector3(...pts["right_hip"]));
+            if (mirrorAvatar) vThigh.x = -vThigh.x;
+            alignBone(bUpperLegR, vThigh, 0.85);
+
+            const anklePtR = (pts["right_ankle"] && conf("right_ankle") >= minConf) ? pts["right_ankle"] : ((pts["right_heel"] && conf("right_heel") >= minConf) ? pts["right_heel"] : null);
+            if (anklePtR) {
+              const vShin = new THREE.Vector3(...anklePtR).sub(new THREE.Vector3(...pts["right_knee"]));
+              if (mirrorAvatar) vShin.x = -vShin.x;
+              alignBone(bLowerLegR, vShin, 0.85);
+            } else if (bLowerLegR) {
+              // Smart Fallback when Ankle is cut off by webcam bottom:
+              // If rear leg extended back (vThigh.z < -0.05, e.g. Zenkutsu-dachi), calf continues straight back along thigh!
+              const vShin = (vThigh.z < -0.05) ? vThigh.clone().normalize() : new THREE.Vector3(vThigh.x * 0.15, -0.98, -0.05);
+              alignBone(bLowerLegR, vShin, 0.65);
+            }
+
+            // Dedicated Foot Rotation Tracking (Yaw heading & pitch on the floor)
+            if (bFootR) {
+              const origR = (pts["right_heel"] && conf("right_heel") >= minConf) ? pts["right_heel"] : (pts["right_ankle"] && conf("right_ankle") >= minConf ? pts["right_ankle"] : null);
+              const hasToeR = pts["right_foot_index"] && conf("right_foot_index") >= minConf;
+              if (origR && hasToeR) {
+                const vFoot = new THREE.Vector3(...pts["right_foot_index"]).sub(new THREE.Vector3(...origR));
+                if (mirrorAvatar) vFoot.x = -vFoot.x;
+                alignFoot(bFootR, vFoot, mirrorAvatar ? "L" : "R");
+              } else if (bFootR.restLocalQ) {
+                bFootR.quaternion.slerp(bFootR.restLocalQ, 0.15);
+              }
+            }
+          } else if (bUpperLegR) {
+            // Ground avatar in a stable karate stance (Heiko-dachi) when lower body is not visible
+            const groundThighR = new THREE.Vector3(-0.06, -0.98, 0.05);
+            const groundShinR = new THREE.Vector3(-0.02, -0.98, -0.05);
+            alignBone(bUpperLegR, groundThighR, 0.20);
+            if (bLowerLegR) alignBone(bLowerLegR, groundShinR, 0.20);
+            if (bFootR && bFootR.restLocalQ) bFootR.quaternion.slerp(bFootR.restLocalQ, 0.15);
+          }
+
+          // Physical Left Leg & Foot
+          const bUpperLegL = getBone(legNameL);
+          const bLowerLegL = getBone(shinNameL);
+          const bFootL = getBone(footNameL);
+
+          if (hasKneeL) {
+            const vThigh = new THREE.Vector3(...pts["left_knee"]).sub(new THREE.Vector3(...pts["left_hip"]));
+            if (mirrorAvatar) vThigh.x = -vThigh.x;
+            alignBone(bUpperLegL, vThigh, 0.85);
+
+            const anklePtL = (pts["left_ankle"] && conf("left_ankle") >= minConf) ? pts["left_ankle"] : ((pts["left_heel"] && conf("left_heel") >= minConf) ? pts["left_heel"] : null);
+            if (anklePtL) {
+              const vShin = new THREE.Vector3(...anklePtL).sub(new THREE.Vector3(...pts["left_knee"]));
+              if (mirrorAvatar) vShin.x = -vShin.x;
+              alignBone(bLowerLegL, vShin, 0.85);
+            } else if (bLowerLegL) {
+              // Smart Fallback when Ankle is cut off by webcam bottom:
+              // If rear leg extended back (vThigh.z < -0.05, e.g. Zenkutsu-dachi), calf continues straight back along thigh!
+              const vShin = (vThigh.z < -0.05) ? vThigh.clone().normalize() : new THREE.Vector3(vThigh.x * 0.15, -0.98, -0.05);
+              alignBone(bLowerLegL, vShin, 0.65);
+            }
+
+            // Dedicated Foot Rotation Tracking (Yaw heading & pitch on the floor)
+            if (bFootL) {
+              const origL = (pts["left_heel"] && conf("left_heel") >= minConf) ? pts["left_heel"] : (pts["left_ankle"] && conf("left_ankle") >= minConf ? pts["left_ankle"] : null);
+              const hasToeL = pts["left_foot_index"] && conf("left_foot_index") >= minConf;
+              if (origL && hasToeL) {
+                const vFoot = new THREE.Vector3(...pts["left_foot_index"]).sub(new THREE.Vector3(...origL));
+                if (mirrorAvatar) vFoot.x = -vFoot.x;
+                alignFoot(bFootL, vFoot, mirrorAvatar ? "R" : "L");
+              } else if (bFootL.restLocalQ) {
+                bFootL.quaternion.slerp(bFootL.restLocalQ, 0.15);
+              }
+            }
+          } else if (bUpperLegL) {
+            // Ground avatar in a stable karate stance when lower body is not visible
+            const groundThighL = new THREE.Vector3(0.06, -0.98, 0.05);
+            const groundShinL = new THREE.Vector3(0.02, -0.98, -0.05);
+            alignBone(bUpperLegL, groundThighL, 0.20);
+            if (bLowerLegL) alignBone(bLowerLegL, groundShinL, 0.20);
+            if (bFootL && bFootL.restLocalQ) bFootL.quaternion.slerp(bFootL.restLocalQ, 0.15);
+          }
+        }
+
+        // Neck stabilization: maintain upright cervical alignment
+        const neckBone = getBone("Neck");
+        if (neckBone && neckBone.restLocalQ) {
+          neckBone.quaternion.slerp(neckBone.restLocalQ, 0.50);
+        }
+
+        // Head Metsuke posture adjustment
+        const headBone = getBone("Head");
+        if (headBone && headBone.restLocalQ) {
+          const h = frameData.head || { pitch: 0, yaw: 0, roll: 0 };
+          // Negative h.pitch correctly tilts head UP when user looks up, and DOWN when user looks down in Three.js Euler space
+          // headPitchOffset maintains upright forward gaze (chin slightly elevated, Metsuke gaze)
+          const pitchAngle = -(h.pitch || 0) + headPitchOffset;
+          const yawAngle = (h.yaw || 0);
+          const rollAngle = (h.roll || 0);
+          const euler = new THREE.Euler(pitchAngle, yawAngle, rollAngle, 'YXZ');
+          const targetLocal = headBone.restLocalQ.clone().multiply(new THREE.Quaternion().setFromEuler(euler));
+          headBone.quaternion.slerp(targetLocal, 0.70);
+        }
+
+        // Finger curls
+        if (frameData.fingers) {
+          const fSideR = mirrorAvatar ? "L" : "R";
+          const fSideL = mirrorAvatar ? "R" : "L";
+          applyFingers(fSideR, frameData.fingers.right);
+          applyFingers(fSideL, frameData.fingers.left);
+        }
+
+        avatarModel.updateMatrixWorld(true);
+      }
+    };
+
+    // Smooth finger state memory (EMA) with individual phalanx angles and abduction
+    const fingerState = {
+      L: {
+        thumb: 0.15, index: 0.15, middle: 0.15, ring: 0.15, pinky: 0.15,
+        phalanges: {},
+        abduction: {}
+      },
+      R: {
+        thumb: 0.15, index: 0.15, middle: 0.15, ring: 0.15, pinky: 0.15,
+        phalanges: {},
+        abduction: {}
+      }
+    };
+
+    function applyFingers(side, fData) {
+      const types = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
+      const sState = fingerState[side] || fingerState.L;
+      if (!sState.phalanges) sState.phalanges = {};
+      if (!sState.abduction) sState.abduction = {};
+
+      const hasPhalanges = fData && fData.phalanges && fData.detected;
+
+      for (const t of types) {
+        const key = t.toLowerCase();
+        let targetCurl = 0.15; // Natural relaxed Kamae hand
+
+        if (fData && fData.detected && typeof fData[key] === 'number') {
+          targetCurl = fData[key];
+        } else if (fData && typeof fData.general_curl === 'number') {
+          targetCurl = fData.general_curl;
+        }
+
+        // Smooth overall curl
+        const prevCurl = sState[key] !== undefined ? sState[key] : 0.15;
+        const diffCurl = Math.abs(targetCurl - prevCurl);
+        const alphaCurl = diffCurl > 0.08 ? 0.75 : 0.40;
+        sState[key] = prevCurl * (1.0 - alphaCurl) + targetCurl * alphaCurl;
+        const curl = sState[key];
+
+        // Phalange angles: [MCP, PIP, DIP]
+        let targetAngles = [curl * 1.40, curl * 1.65, curl * 1.30];
+        let targetAbd = 0.0;
+
+        if (hasPhalanges && fData.phalanges[key]) {
+          targetAngles = fData.phalanges[key];
+          if (fData.abduction && typeof fData.abduction[key] === 'number') {
+            targetAbd = fData.abduction[key];
+          }
+        }
+
+        if (!sState.phalanges[key]) sState.phalanges[key] = [0.15, 0.15, 0.15];
+        const prevAngles = sState.phalanges[key];
+        const smoothedAngles = [];
+        for (let j = 0; j < 3; j++) {
+          const pA = prevAngles[j] !== undefined ? prevAngles[j] : 0.15;
+          const tA = targetAngles[j] !== undefined ? targetAngles[j] : 0.15;
+          const diffA = Math.abs(tA - pA);
+          const alphaA = diffA > 0.10 ? 0.75 : 0.35;
+          smoothedAngles[j] = pA * (1.0 - alphaA) + tA * alphaA;
+        }
+        sState.phalanges[key] = smoothedAngles;
+
+        const prevAbd = sState.abduction[key] !== undefined ? sState.abduction[key] : 0.0;
+        const diffAbd = Math.abs(targetAbd - prevAbd);
+        const alphaAbd = diffAbd > 0.10 ? 0.70 : 0.30;
+        sState.abduction[key] = prevAbd * (1.0 - alphaAbd) + targetAbd * alphaAbd;
+        const smoothAbd = sState.abduction[key];
+
+        // Apply real anatomical bone rotations to all 3 phalanges
+        for (let idx = 1; idx <= 3; idx++) {
+          const b = getBone(`${t}${idx}.${side}`);
+          if (b && b.restLocalQ) {
+            if (t === "Thumb") {
+              const zSign = (side === "L") ? 1.0 : -1.0;
+              const flexVal = smoothedAngles[idx - 1] !== undefined ? smoothedAngles[idx - 1] : curl * 1.2;
+              let rotVec;
+              if (idx === 1) {
+                // Trapeziometacarpal / CMC: opposition across palm and flexion
+                const oppVal = hasPhalanges ? Math.max(0.0, smoothAbd) : curl;
+                rotVec = new THREE.Vector3(-0.35 * flexVal, 0.0, 0.80 * oppVal * zSign);
+              } else if (idx === 2) {
+                // MCP: flexion
+                rotVec = new THREE.Vector3(-0.80 * flexVal, 0.0, 0.35 * curl * zSign);
+              } else {
+                // IP: distal flexion
+                rotVec = new THREE.Vector3(-0.95 * flexVal, 0.0, 0.15 * zSign);
+              }
+              const len = rotVec.length();
+              if (len > 1e-4) {
+                const flexQ = new THREE.Quaternion().setFromAxisAngle(rotVec.clone().normalize(), len);
+                b.quaternion.copy(b.restLocalQ.clone().multiply(flexQ));
+              } else {
+                b.quaternion.copy(b.restLocalQ);
+              }
+            } else {
+              // Four fingers: MCP, PIP, DIP individual flexion around local -X
+              const flexAng = smoothedAngles[idx - 1] !== undefined ? smoothedAngles[idx - 1] : curl * 1.4;
+              const flexQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(-1, 0, 0), flexAng);
+
+              if (idx === 1) {
+                // Phalanx 1 (MCP): Abduction (finger spreading apart in palm plane) around Z
+                // For Left hand: Index spreads +Z, Pinky spreads -Z
+                // For Right hand: Index spreads -Z, Pinky spreads +Z
+                const sideSign = (side === "L") ? 1.0 : -1.0;
+                let abdDir = 0.0;
+                if (t === "Index") abdDir = 1.0 * sideSign;
+                else if (t === "Pinky") abdDir = -1.2 * sideSign;
+                else if (t === "Ring") abdDir = -0.4 * sideSign;
+
+                const abdAng = smoothAbd * abdDir * 0.45;
+                const abdQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), abdAng);
+                b.quaternion.copy(b.restLocalQ.clone().multiply(abdQ).multiply(flexQ));
+              } else {
+                b.quaternion.copy(b.restLocalQ.clone().multiply(flexQ));
+              }
+            }
+          }
+        }
+      }
+    }
+
+    window.resetPose = function() {
+      seatedWeight = 0.0;
+      smoothRootY = 0.0;
+      smoothRootZ = 0.0;
+      nominalLegLen = 0.82;
+      for (const b of Object.values(boneMap)) {
+        if (b.restLocalQ) b.quaternion.copy(b.restLocalQ);
+      }
+      if (avatarModel) {
+        avatarModel.position.set(0, 0, 0);
+        avatarModel.updateMatrixWorld(true);
+      }
+    };
+
+    window.setCamera = function(preset) {
+      document.querySelectorAll('.hud-btn').forEach(b => b.classList.remove('active'));
+      const activeBtn = document.getElementById(`btn-${preset}`);
+      if (activeBtn) activeBtn.classList.add('active');
+
+      if (preset === 'front') {
+        camera.position.set(0, 1.25, 3.2);
+        controls.target.set(0, 0.95, 0);
+      } else if (preset === '34') {
+        camera.position.set(2.0, 1.4, 2.5);
+        controls.target.set(0, 0.95, 0);
+      } else if (preset === 'side') {
+        camera.position.set(3.2, 1.25, 0);
+        controls.target.set(0, 0.95, 0);
+      } else if (preset === 'back') {
+        camera.position.set(0, 1.25, -3.2);
+        controls.target.set(0, 0.95, 0);
+      }
+    };
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Render loop (no deprecated SkeletonHelper.update() call)
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
