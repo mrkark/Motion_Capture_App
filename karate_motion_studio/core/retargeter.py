@@ -176,10 +176,12 @@ class Retargeter:
         if "mid_hip" in pts and "mid_shoulder" in pts:
             v_torso = np.array(pts["mid_shoulder"]) - np.array(pts["mid_hip"])
             if np.linalg.norm(v_torso) > 1e-4:
-                # Damp perspective forward slouch (parallax artifact) to keep upright Seichusen
-                v_torso[2] *= 0.15
-                if abs(v_torso[2]) < 0.03:
-                    v_torso[2] = 0.0
+                # Only damp small perspective slouch when standing tall; preserve full forward bending
+                is_upright = v_torso[1] > 0.45 and abs(v_torso[2]) < 0.08
+                if is_upright:
+                    v_torso[2] *= (abs(v_torso[2]) / 0.08) ** 2
+                    if abs(v_torso[2]) < 0.02:
+                        v_torso[2] = 0.0
                 q_spine_world = quat_from_unit_vectors(np.array([0.0, 1.0, 0.0]), v_torso)
                 world_quats["Spine"] = q_spine_world
                 local_quats["Spine"] = [round(float(v), 4) for v in q_spine_world]

@@ -402,38 +402,60 @@ class MocapTracker:
             # When arms cross in front of the chest (blocks, strikes, chambers), monocular depth
             # estimation can erroneously predict negative Z values (placing wrists/elbows behind the spine),
             # causing the forearm to pierce backwards through the ribcage and dislocate the shoulder.
-            # Enforce that arm joints crossing in front of the torso stay physically in front of the chest.
+            # Anatomical Torso Clearance (3D Line Segment Projection):
+            # Enforces that arm joints crossing in front of the chest stay physically in front of the sternum.
+            # Uses true 3D projection onto the spine line segment (mid_hip -> mid_shoulder) so it works
+            # identically whether standing tall, bending forward, or twisting, and leaves hands free to
+            # naturally touch thighs, knees, and shins (t < 0.20).
             if (
                 "left_shoulder" in raw_pts_3d
                 and "right_shoulder" in raw_pts_3d
                 and "left_hip" in raw_pts_3d
                 and "right_hip" in raw_pts_3d
             ):
-                l_sh = raw_pts_3d["left_shoulder"]
-                r_sh = raw_pts_3d["right_shoulder"]
-                l_hp = raw_pts_3d["left_hip"]
-                r_hp = raw_pts_3d["right_hip"]
+                l_sh = np.array(raw_pts_3d["left_shoulder"])
+                r_sh = np.array(raw_pts_3d["right_shoulder"])
+                l_hp = np.array(raw_pts_3d["left_hip"])
+                r_hp = np.array(raw_pts_3d["right_hip"])
 
-                chest_z = (l_sh[2] + r_sh[2]) * 0.5
-                hip_z = (l_hp[2] + r_hp[2]) * 0.5
-                torso_y_top = max(l_sh[1], r_sh[1]) + 0.05
-                torso_y_bottom = min(l_hp[1], r_hp[1]) - 0.05
-                torso_y_span = max(0.15, torso_y_top - torso_y_bottom)
+                mid_sh = (l_sh + r_sh) * 0.5
+                mid_hp = (l_hp + r_hp) * 0.5
+                v_spine = mid_sh - mid_hp
+                spine_len_sq = float(np.dot(v_spine, v_spine))
 
-                # Lateral torso boundaries with generous margin
-                torso_x_left = max(l_sh[0], l_hp[0]) + 0.05
-                torso_x_right = min(r_sh[0], r_hp[0]) - 0.05
+                if spine_len_sq > 1e-4:
+                    uy = v_spine / math.sqrt(spine_len_sq)
+                    v_lat = l_sh - r_sh
+                    ux = v_lat - float(np.dot(v_lat, uy)) * uy
+                    ux_norm = float(np.linalg.norm(ux))
+                    if ux_norm > 1e-4:
+                        ux /= ux_norm
+                        uz = np.cross(ux, uy)  # Chest forward normal from spine through sternum
+                        ribcage_half_width = float(np.linalg.norm(v_lat)) * 0.55
 
-                for arm_j in ["left_elbow", "left_wrist", "right_elbow", "right_wrist", "left_index", "right_index"]:
-                    if arm_j in raw_pts_3d:
-                        pt = raw_pts_3d[arm_j]
-                        if torso_x_right <= pt[0] <= torso_x_left and torso_y_bottom <= pt[1] <= torso_y_top:
-                            y_ratio = float(np.clip((pt[1] - torso_y_bottom) / torso_y_span, 0.0, 1.0))
-                            spine_z = hip_z * (1.0 - y_ratio) + chest_z * y_ratio
-                            # Sternum and pectoral surface is at least 8 cm in front of spine centerline
-                            min_clearance_z = spine_z + 0.08
-                            if pt[2] < min_clearance_z:
-                                pt[2] = min_clearance_z
+                        for arm_j in ["left_elbow", "left_wrist", "right_elbow", "right_wrist", "left_index", "right_index"]:
+                            if arm_j in raw_pts_3d:
+                                pt = np.array(raw_pts_3d[arm_j])
+                                v_pt = pt - mid_hp
+                                t = float(np.dot(v_pt, v_spine) / spine_len_sq)
+
+                                # Only apply to thoracic spine / ribcage (t in [0.20, 1.08]).
+                                # Pelvis, groin, and legs (t < 0.20) are left completely free so hands can touch knees and legs.
+                                if 0.20 <= t <= 1.08:
+                                    spine_center = mid_hp + t * v_spine
+                                    delta = pt - spine_center
+                                    dist_lateral = abs(float(np.dot(delta, ux)))
+
+                                    if dist_lateral < ribcage_half_width:
+                                        dist_along_normal = float(np.dot(delta, uz))
+                                        min_clearance = 0.08  # 8 cm in front of spine centerline
+                                        if dist_along_normal < min_clearance:
+                                            cleared_pt = pt + (min_clearance - dist_along_normal) * uz
+                                            raw_pts_3d[arm_j] = [
+                                                round(float(cleared_pt[0]), 4),
+                                                round(float(cleared_pt[1]), 4),
+                                                round(float(cleared_pt[2]), 4),
+                                            ]
 
             # Real-time 1€ filter: eliminate sensor micro-jitter while preserving sharp strikes
             pts_3d: Dict[str, List[float]] = {}

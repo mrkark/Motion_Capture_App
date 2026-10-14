@@ -280,22 +280,25 @@
       bone.updateMatrixWorld(true);
     }
 
-    // --- DYNAMIC CLAVICLE / SCAPULAR PROTRACTION (SHOULDER GIRDLE) ---
+    // --- DYNAMIC CLAVICLE / SCAPULAR PROTRACTION & DEPRESSION ---
     // Engages Shoulder.L and Shoulder.R to seat the humerus head naturally in the socket
-    // during forward strikes, punches, and cross-torso blocks, eliminating shoulder dislocation.
+    // during forward strikes, punches, cross-torso blocks, and downward reaches toward legs.
     function alignShoulder(bone, vArm, sideKey = "R") {
       if (!bone || !vArm || vArm.lengthSq() < 1e-4) return;
       const uArm = vArm.clone().normalize();
       const fwdReach = Math.max(0, uArm.z);
       const elevate = Math.max(0, uArm.y);
+      const depress = Math.min(0, uArm.y); // downward reaches toward legs
       let vClavicle = null;
 
       if (sideKey === "R") {
         const crossReach = Math.max(0, uArm.x); // crossing left (+X)
-        vClavicle = new THREE.Vector3(-1.0 + crossReach * 0.35, elevate * 0.25, fwdReach * 0.35 + crossReach * 0.25).normalize();
+        const yOffset = elevate > 0 ? elevate * 0.25 : depress * 0.15;
+        vClavicle = new THREE.Vector3(-1.0 + crossReach * 0.35, yOffset, fwdReach * 0.35 + crossReach * 0.25).normalize();
       } else {
         const crossReach = Math.max(0, -uArm.x); // crossing right (-X)
-        vClavicle = new THREE.Vector3(1.0 - crossReach * 0.35, elevate * 0.25, fwdReach * 0.35 + crossReach * 0.25).normalize();
+        const yOffset = elevate > 0 ? elevate * 0.25 : depress * 0.15;
+        vClavicle = new THREE.Vector3(1.0 - crossReach * 0.35, yOffset, fwdReach * 0.35 + crossReach * 0.25).normalize();
       }
       alignBone(bone, vClavicle, 0.70);
     }
@@ -496,15 +499,87 @@
           const minConf = 0.08;
           const conf = (name) => (vis[name] !== undefined ? vis[name] : 1.0);
 
-          // Spine: Mid Hip -> Mid Shoulder
+          // --- FULL 3D TORSO & MULTI-SEGMENT SPINE SOLVER ---
+          // Reconstructs authentic 3D spinal flexion, lateral bending, and shoulder twist.
+          // Distributes curvature naturally across Spine (lumbar), Spine1, and Chest (thoracic),
+          // enabling the avatar to bend over forward, reach down, and place hands on knees/legs.
+          let torsoFwdZ = 0.0;
           if (pts["left_hip"] && pts["right_hip"] && pts["left_shoulder"] && pts["right_shoulder"]) {
-            const midHip = new THREE.Vector3(...pts["left_hip"]).add(new THREE.Vector3(...pts["right_hip"])).multiplyScalar(0.5);
-            const midSh = new THREE.Vector3(...pts["left_shoulder"]).add(new THREE.Vector3(...pts["right_shoulder"])).multiplyScalar(0.5);
+            const pLSh = pts["left_shoulder"];
+            const pRSh = pts["right_shoulder"];
+            const pLHp = pts["left_hip"];
+            const pRHp = pts["right_hip"];
+
+            const midHip = new THREE.Vector3(...pLHp).add(new THREE.Vector3(...pRHp)).multiplyScalar(0.5);
+            const midSh = new THREE.Vector3(...pLSh).add(new THREE.Vector3(...pRSh)).multiplyScalar(0.5);
+            if (mirrorAvatar) {
+              midHip.x = -midHip.x;
+              midSh.x = -midSh.x;
+            }
+
             const vSpine = midSh.clone().sub(midHip);
-            // Damp perspective forward slouch (parallax artifact from webcam) to keep karate Seichusen upright
-            vSpine.z *= 0.15;
-            if (Math.abs(vSpine.z) < 0.03) vSpine.z = 0.0;
-            alignBone(getBone("Spine"), vSpine, 0.75);
+            torsoFwdZ = vSpine.z;
+
+            // Perspective slouch filter: only active when standing tall in upright posture
+            // When user deliberately bends forward (vSpine.y drops or |vSpine.z| >= 0.08), 100% flexion is preserved!
+            const isUprightStance = vSpine.y > 0.45 && Math.abs(vSpine.z) < 0.08;
+            if (isUprightStance) {
+              vSpine.z *= 0.15;
+              if (Math.abs(vSpine.z) < 0.02) vSpine.z = 0.0;
+            }
+
+            if (vSpine.lengthSq() > 1e-4) {
+              const uy = vSpine.clone().normalize();
+              let vLat = new THREE.Vector3(...pLSh).sub(new THREE.Vector3(...pRSh));
+              if (mirrorAvatar) vLat.x = -vLat.x;
+              if (vLat.lengthSq() > 1e-4) {
+                vLat.normalize();
+                // Gram-Schmidt orthogonalization: project lateral vector onto plane normal to spine
+                const dotLat = vLat.dot(uy);
+                const ux = vLat.clone().sub(uy.clone().multiplyScalar(dotLat)).normalize();
+                if (ux.lengthSq() > 1e-4) {
+                  const uz = new THREE.Vector3().crossVectors(ux, uy).normalize();
+                  ux.crossVectors(uy, uz).normalize();
+
+                  const basisMat = new THREE.Matrix4().makeBasis(ux, uy, uz);
+                  const targetTorsoWorldQ = new THREE.Quaternion().setFromRotationMatrix(basisMat);
+
+                  const bSpine = getBone("Spine");
+                  const bSpine1 = getBone("Spine1");
+                  const bChest = getBone("Chest");
+                  const qIdentity = new THREE.Quaternion(0, 0, 0, 1);
+
+                  // 1. Lumbar Spine (Spine) takes ~45% of bend
+                  if (bSpine) {
+                    const qLumbarWorld = qIdentity.clone().slerp(targetTorsoWorldQ, 0.45);
+                    const parentQSpine = new THREE.Quaternion();
+                    if (bSpine.parent) bSpine.parent.getWorldQuaternion(parentQSpine);
+                    const targetLocalSpine = parentQSpine.clone().invert().multiply(qLumbarWorld);
+                    bSpine.quaternion.slerp(targetLocalSpine, 0.75);
+                    bSpine.updateMatrixWorld(true);
+                  }
+
+                  // 2. Mid Thoracic Spine (Spine1) takes ~75% of bend
+                  if (bSpine1) {
+                    const qMidWorld = qIdentity.clone().slerp(targetTorsoWorldQ, 0.75);
+                    const parentQSpine1 = new THREE.Quaternion();
+                    if (bSpine1.parent) bSpine1.parent.getWorldQuaternion(parentQSpine1);
+                    const targetLocalSpine1 = parentQSpine1.clone().invert().multiply(qMidWorld);
+                    bSpine1.quaternion.slerp(targetLocalSpine1, 0.75);
+                    bSpine1.updateMatrixWorld(true);
+                  }
+
+                  // 3. Upper Chest (Chest) carries full 100% orientation, bringing shoulders forward and down
+                  if (bChest) {
+                    const parentQChest = new THREE.Quaternion();
+                    if (bChest.parent) bChest.parent.getWorldQuaternion(parentQChest);
+                    const targetLocalChest = parentQChest.clone().invert().multiply(targetTorsoWorldQ);
+                    bChest.quaternion.slerp(targetLocalChest, 0.75);
+                    bChest.updateMatrixWorld(true);
+                  }
+                }
+              }
+            }
           }
 
           // Bone mapping: Anatomical vs Mirror
@@ -683,7 +758,9 @@
           }
 
           // Hips push slightly backwards (-Z) during deep squat for physical balance
-          const targetRootZ = targetRootY * 0.25;
+          // and during forward torso bending to maintain realistic human balance over the feet
+          const fwdBendShift = Math.max(0, torsoFwdZ) * 0.22;
+          const targetRootZ = targetRootY * 0.25 - fwdBendShift;
 
           // Smooth EMA filtering for root translation
           smoothRootY = smoothRootY * 0.80 + targetRootY * 0.20;
