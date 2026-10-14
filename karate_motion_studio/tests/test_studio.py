@@ -812,14 +812,26 @@ class TestKarateMotionStudio(unittest.TestCase):
         )
         self.assertEqual(thread_dual.camera_source, "dual:phone+phone")
 
-        # 5. Verify CameraManagerDialog Qt Widget
+        # 5. Verify CameraManagerDialog Qt Widget & Dual QR Codes
         app = QtWidgets.QApplication.instance()
         if app is None:
             app = QtWidgets.QApplication(sys.argv)
 
+        self.assertTrue(server.get_connection_url("cam1").endswith("/cam1"))
+        self.assertTrue(server.get_connection_url("cam2").endswith("/cam2"))
+
+        qr_cam1 = server.generate_qr_png_bytes(role="cam1")
+        qr_cam2 = server.generate_qr_png_bytes(role="cam2")
+        self.assertTrue(qr_cam1.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertTrue(qr_cam2.startswith(b"\x89PNG\r\n\x1a\n"))
+
+        self.assertIsNotNone(thread_dual.tracker_cam2, "Dual camera capture thread must have dedicated secondary tracker")
+
         dialog = CameraManagerDialog(phone_server=server, active_source="phone:cam1")
         self.assertEqual(dialog.active_source, "phone:cam1")
         self.assertTrue(dialog.btn_use_phone1.isChecked())
+        self.assertIsNotNone(dialog.lbl_qr_cam1)
+        self.assertIsNotNone(dialog.lbl_qr_cam2)
 
         # Test source selection switching in dialog
         dialog.btn_use_phone2.setChecked(True)
@@ -831,7 +843,7 @@ class TestKarateMotionStudio(unittest.TestCase):
         self.assertEqual(dialog.get_selected_source(), "dual:phone+phone")
 
         # 6. Verify Viewer Kinematics Template:
-        # Punch artificial override must be removed so blocks and chambered fists are pure
+        # Pelvis yaw, pelvic forward tilt, and clavicle reach
         viewer_html_path = PROJECT_ROOT / "demo_assets" / "viewer_template.html"
         viewer_html = viewer_html_path.read_text(encoding="utf-8")
 
@@ -841,6 +853,9 @@ class TestKarateMotionStudio(unittest.TestCase):
         self.assertIn("alignShoulder", viewer_html, "Clavicle protraction solver must be present to seat shoulder socket")
         self.assertIn("alignFoot", viewer_html, "Dedicated foot rotation solver must be present to track feet turning on floor")
         self.assertIn("dot < -0.92", viewer_html, "Singularity protection must be present to prevent antiparallel joint popping")
+        self.assertIn("bHips", viewer_html, "3D pelvis orientation solver must be present")
+        self.assertIn("hipYaw", viewer_html, "Pelvic yaw rotation must be solved for turning in stances")
+        self.assertIn("pelvicTilt", viewer_html, "Anterior pelvic tilt must be solved for forward bending and touching legs")
 
     # -------------------------------------------------------------------------
     # Test 15: Torso Clearance and Foot Retargeting Integrity

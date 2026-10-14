@@ -119,71 +119,114 @@ class CameraManagerDialog(QtWidgets.QDialog):
         layout.addWidget(btn_box)
 
     def _setup_tab_qr(self, parent: QtWidgets.QWidget):
-        layout = QtWidgets.QHBoxLayout(parent)
+        layout = QtWidgets.QVBoxLayout(parent)
         layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(18)
+        layout.setSpacing(12)
 
-        # Left: QR Code Display
-        qr_container = QtWidgets.QVBoxLayout()
-        self.lbl_qr_image = QtWidgets.QLabel()
-        self.lbl_qr_image.setFixedSize(180, 180)
-        self.lbl_qr_image.setStyleSheet("background: white; border-radius: 8px; padding: 6px;")
-        self.lbl_qr_image.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        qr_container.addWidget(self.lbl_qr_image)
+        # Top Section: Two QR Cards side by side
+        qr_row = QtWidgets.QHBoxLayout()
+        qr_row.setSpacing(16)
 
-        lbl_qr_hint = QtWidgets.QLabel("Наведите камеру смартфона")
-        lbl_qr_hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        lbl_qr_hint.setStyleSheet("font-size: 8.5pt; color: #8c939e;")
-        qr_container.addWidget(lbl_qr_hint)
-        layout.addLayout(qr_container)
+        # CARD 1: Phone 1 - Front Camera
+        card_cam1 = QtWidgets.QFrame()
+        card_cam1.setStyleSheet("""
+            QFrame {
+                background: #181c24;
+                border: 2px solid #10b981;
+                border-radius: 10px;
+                padding: 10px;
+            }
+        """)
+        c1_layout = QtWidgets.QVBoxLayout(card_cam1)
+        c1_layout.setSpacing(6)
+        c1_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        # Right: Instructions & Live Devices
-        info_col = QtWidgets.QVBoxLayout()
-        info_col.setSpacing(8)
+        lbl_c1_title = QtWidgets.QLabel("📱 Телефон 1: ФРОНТ (Лицо/Корпус)")
+        lbl_c1_title.setStyleSheet("font-size: 10.5pt; font-weight: bold; color: #10b981;")
+        lbl_c1_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        c1_layout.addWidget(lbl_c1_title)
 
-        lbl_step1 = QtWidgets.QLabel("1. Убедитесь, что телефон подключен к <b>тому же Wi-Fi</b>.")
-        info_col.addWidget(lbl_step1)
+        self.lbl_qr_cam1 = QtWidgets.QLabel()
+        self.lbl_qr_cam1.setFixedSize(150, 150)
+        self.lbl_qr_cam1.setStyleSheet("background: white; border-radius: 6px; padding: 4px;")
+        self.lbl_qr_cam1.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        c1_layout.addWidget(self.lbl_qr_cam1)
+        self.lbl_qr_image = self.lbl_qr_cam1  # backwards compatibility
 
-        url = self.phone_server.get_connection_url()
-        self.lbl_url = QtWidgets.QLabel(f"2. Или введите в браузере телефона: <a href='{url}' style='color: #2ed573; font-weight: bold;'>{url}</a>")
-        self.lbl_url.setOpenExternalLinks(True)
-        info_col.addWidget(self.lbl_url)
+        url_cam1 = self.phone_server.get_connection_url("cam1")
+        self.lbl_url_cam1 = QtWidgets.QLabel(f"<a href='{url_cam1}' style='color: #10b981; font-weight: bold; font-size: 8.5pt;'>{url_cam1}</a>")
+        self.lbl_url_cam1.setOpenExternalLinks(True)
+        self.lbl_url_cam1.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        c1_layout.addWidget(self.lbl_url_cam1)
 
-        lbl_step3 = QtWidgets.QLabel("3. Нажмите <b>«Начать эфир»</b> на экране телефона.")
-        info_col.addWidget(lbl_step3)
+        self.lbl_phone1_status = QtWidgets.QLabel("⚪ Ожидание подключения...")
+        self.lbl_phone1_status.setStyleSheet("font-size: 8.5pt; color: #8c939e;")
+        self.lbl_phone1_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        c1_layout.addWidget(self.lbl_phone1_status)
 
-        # Security helper box for mobile HTTPS certificates
-        box_sec = QtWidgets.QFrame()
-        box_sec.setStyleSheet("background-color: #232731; border: 1px solid #ff4757; border-radius: 6px; padding: 6px;")
-        sec_layout = QtWidgets.QVBoxLayout(box_sec)
-        sec_layout.setContentsMargins(8, 6, 8, 6)
-        sec_layout.setSpacing(3)
-        lbl_sec_t = QtWidgets.QLabel("<b>🔒 Доступ к камере в мобильном браузере:</b>")
-        lbl_sec_t.setStyleSheet("color: #ff6b81; font-size: 8.5pt;")
-        sec_layout.addWidget(lbl_sec_t)
-        lbl_sec_b = QtWidgets.QLabel(
-            "• Для доступа к камере используется защищенный <b>HTTPS</b>.<br>"
-            "• При предупреждении о сертификате нажмите <b>«Дополнительно» → «Перейти на сайт»</b><br>"
-            "  (на iPhone в Safari: <b>«Показать подробности» → «Посетить этот веб-сайт»</b>).<br>"
-            "• Во всплывающем окне нажмите <b>«Разрешить»</b> доступ к камере."
+        qr_row.addWidget(card_cam1)
+
+        # CARD 2: Phone 2 - Side Camera (Depth / Stance)
+        card_cam2 = QtWidgets.QFrame()
+        card_cam2.setStyleSheet("""
+            QFrame {
+                background: #181c24;
+                border: 2px solid #06b6d4;
+                border-radius: 10px;
+                padding: 10px;
+            }
+        """)
+        c2_layout = QtWidgets.QVBoxLayout(card_cam2)
+        c2_layout.setSpacing(6)
+        c2_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
+        lbl_c2_title = QtWidgets.QLabel("📱 Телефон 2: СБОКУ (Стойка/Глубина)")
+        lbl_c2_title.setStyleSheet("font-size: 10.5pt; font-weight: bold; color: #06b6d4;")
+        lbl_c2_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        c2_layout.addWidget(lbl_c2_title)
+
+        self.lbl_qr_cam2 = QtWidgets.QLabel()
+        self.lbl_qr_cam2.setFixedSize(150, 150)
+        self.lbl_qr_cam2.setStyleSheet("background: white; border-radius: 6px; padding: 4px;")
+        self.lbl_qr_cam2.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        c2_layout.addWidget(self.lbl_qr_cam2)
+
+        url_cam2 = self.phone_server.get_connection_url("cam2")
+        self.lbl_url_cam2 = QtWidgets.QLabel(f"<a href='{url_cam2}' style='color: #06b6d4; font-weight: bold; font-size: 8.5pt;'>{url_cam2}</a>")
+        self.lbl_url_cam2.setOpenExternalLinks(True)
+        self.lbl_url_cam2.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        c2_layout.addWidget(self.lbl_url_cam2)
+
+        self.lbl_phone2_status = QtWidgets.QLabel("⚪ Ожидание подключения...")
+        self.lbl_phone2_status.setStyleSheet("font-size: 8.5pt; color: #8c939e;")
+        self.lbl_phone2_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        c2_layout.addWidget(self.lbl_phone2_status)
+
+        qr_row.addWidget(card_cam2)
+        layout.addLayout(qr_row)
+
+        # Instructions and quick tips
+        box_guide = QtWidgets.QFrame()
+        box_guide.setStyleSheet("background-color: #232731; border: 1px solid #3d4352; border-radius: 8px; padding: 8px 12px;")
+        g_layout = QtWidgets.QVBoxLayout(box_guide)
+        g_layout.setContentsMargins(6, 4, 6, 4)
+        g_layout.setSpacing(4)
+
+        lbl_gt = QtWidgets.QLabel("💡 <b>Инструкция по подключению 2 смартфонов:</b>")
+        lbl_gt.setStyleSheet("color: #ffd32a; font-size: 9pt;")
+        g_layout.addWidget(lbl_gt)
+
+        lbl_gb = QtWidgets.QLabel(
+            "1. Подключите оба телефона к <b>тому же Wi-Fi роутеру</b>, что и компьютер.<br>"
+            "2. Отсканируйте левый QR первым телефоном (поставьте прямо перед собой во весь рост, 2-3 м).<br>"
+            "3. Отсканируйте правый QR вторым телефоном (поставьте сбоку под углом 90° для захвата глубины стоек).<br>"
+            "4. В браузерах телефонов нажмите <b>«Начать эфир»</b>. Камеры синхронизируются автоматически без перепутывания!"
         )
-        lbl_sec_b.setStyleSheet("color: #ced6e0; font-size: 8pt;")
-        sec_layout.addWidget(lbl_sec_b)
-        info_col.addWidget(box_sec)
+        lbl_gb.setStyleSheet("color: #ced6e0; font-size: 8.5pt;")
+        g_layout.addWidget(lbl_gb)
+        layout.addWidget(box_guide)
 
-        info_col.addSpacing(6)
-        lbl_status_head = QtWidgets.QLabel("<b>Статус подключенных телефонов:</b>")
-        info_col.addWidget(lbl_status_head)
-
-        self.lbl_phone1_status = QtWidgets.QLabel("• 📱 Камера 1 (Фронт): ⚪ Ожидание подключения...")
-        self.lbl_phone2_status = QtWidgets.QLabel("• 📱 Камера 2 (Сбоку): ⚪ Ожидание подключения...")
-        info_col.addWidget(self.lbl_phone1_status)
-        info_col.addWidget(self.lbl_phone2_status)
-
-        info_col.addStretch()
-        layout.addLayout(info_col)
-
-        # Generate QR code Pixmap
+        # Generate QR code Pixmaps
         self._update_qr_image()
 
     def _setup_tab_ip(self, parent: QtWidgets.QWidget):
@@ -240,14 +283,24 @@ class CameraManagerDialog(QtWidgets.QDialog):
 
     def _update_qr_image(self):
         try:
-            qr_bytes = self.phone_server.generate_qr_png_bytes()
-            qimg = QtGui.QImage.fromData(qr_bytes)
-            pix = QtGui.QPixmap.fromImage(qimg).scaled(
-                168, 168, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation
+            # QR for Cam 1
+            qr1_bytes = self.phone_server.generate_qr_png_bytes(role="cam1")
+            qimg1 = QtGui.QImage.fromData(qr1_bytes)
+            pix1 = QtGui.QPixmap.fromImage(qimg1).scaled(
+                142, 142, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation
             )
-            self.lbl_qr_image.setPixmap(pix)
+            self.lbl_qr_cam1.setPixmap(pix1)
+
+            # QR for Cam 2
+            qr2_bytes = self.phone_server.generate_qr_png_bytes(role="cam2")
+            qimg2 = QtGui.QImage.fromData(qr2_bytes)
+            pix2 = QtGui.QPixmap.fromImage(qimg2).scaled(
+                142, 142, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation
+            )
+            self.lbl_qr_cam2.setPixmap(pix2)
         except Exception as e:
-            self.lbl_qr_image.setText(f"QR Error: {e}")
+            if hasattr(self, "lbl_qr_cam1"):
+                self.lbl_qr_cam1.setText(f"QR Error: {e}")
 
     def _refresh_connected_devices(self):
         cams = self.phone_server.get_connected_cameras()
@@ -255,16 +308,16 @@ class CameraManagerDialog(QtWidgets.QDialog):
         if "cam1" in cams:
             frame, fps = self.phone_server.get_latest_frame("cam1") or (None, 30.0)
             res_str = f"{frame.shape[1]}x{frame.shape[0]}" if frame is not None else "HD"
-            self.lbl_phone1_status.setText(f"• 📱 Камера 1 (Фронт): <span style='color: #2ed573; font-weight: bold;'>🟢 В эфире ({fps:.1f} FPS, {res_str})</span>")
+            self.lbl_phone1_status.setText(f"<span style='color: #10b981; font-weight: bold;'>🟢 В эфире ({fps:.1f} FPS, {res_str})</span>")
         else:
-            self.lbl_phone1_status.setText("• 📱 Камера 1 (Фронт): <span style='color: #8c939e;'>⚪ Ожидание подключения...</span>")
+            self.lbl_phone1_status.setText("<span style='color: #8c939e;'>⚪ Ожидание подключения...</span>")
 
         if "cam2" in cams:
             frame, fps = self.phone_server.get_latest_frame("cam2") or (None, 30.0)
             res_str = f"{frame.shape[1]}x{frame.shape[0]}" if frame is not None else "HD"
-            self.lbl_phone2_status.setText(f"• 📱 Камера 2 (Сбоку): <span style='color: #2ed573; font-weight: bold;'>🟢 В эфире ({fps:.1f} FPS, {res_str})</span>")
+            self.lbl_phone2_status.setText(f"<span style='color: #06b6d4; font-weight: bold;'>🟢 В эфире ({fps:.1f} FPS, {res_str})</span>")
         else:
-            self.lbl_phone2_status.setText("• 📱 Камера 2 (Сбоку): <span style='color: #8c939e;'>⚪ Ожидание подключения...</span>")
+            self.lbl_phone2_status.setText("<span style='color: #8c939e;'>⚪ Ожидание подключения...</span>")
 
     def _test_ip_stream(self):
         url = self.edit_ip_url.text().strip()

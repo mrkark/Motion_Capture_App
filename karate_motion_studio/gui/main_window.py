@@ -72,6 +72,7 @@ class WebcamCaptureThread(QtCore.QThread):
         self.phone_server = phone_server
         self.running = False
         self.tracker = MocapTracker(track_hands=track_hands)
+        self.tracker_cam2 = MocapTracker(track_hands=False)  # Dedicated secondary tracker for Cam 2 (Side view)
 
         # Recording
         self.is_recording = False
@@ -102,44 +103,128 @@ class WebcamCaptureThread(QtCore.QThread):
         waiting_phase = 0.0
 
         while self.running:
-            raw_frame: Optional[np.ndarray] = None
+            t_now = time.time()
+            t_rel = t_now - self.record_t0 if self.is_recording else 0.0
 
-            if is_phone:
-                if self.phone_server:
-                    if self.camera_source == "phone:cam1":
-                        res = self.phone_server.get_latest_frame("cam1")
-                        if res:
-                            raw_frame, _ = res
-                    elif self.camera_source == "phone:cam2":
-                        res = self.phone_server.get_latest_frame("cam2")
-                        if res:
-                            raw_frame, _ = res
-                    elif self.camera_source.startswith("dual"):
-                        res1 = self.phone_server.get_latest_frame("cam1")
-                        res2 = self.phone_server.get_latest_frame("cam2")
-                        if res1 and res2:
-                            f1, _ = res1
-                            f2, _ = res2
-                            target_h = min(f1.shape[0], f2.shape[0], 720)
-                            w1 = int(f1.shape[1] * (target_h / f1.shape[0]))
-                            w2 = int(f2.shape[1] * (target_h / f2.shape[0]))
-                            f1_res = cv2.resize(f1, (w1, target_h))
-                            f2_res = cv2.resize(f2, (w2, target_h))
-                            cv2.putText(f1_res, "КАМЕРА 1 (ФРОНТ)", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                            cv2.putText(f2_res, "КАМЕРА 2 (СБОКУ)", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-                            raw_frame = np.hstack([f1_res, f2_res])
-                        elif res1:
-                            raw_frame, _ = res1
-                        elif res2:
-                            raw_frame, _ = res2
+            if self.camera_source.startswith("dual"):
+                # DUAL CAMERA MODE: Independent parallel tracking for Front (Cam1) and Side (Cam2)
+                res1 = self.phone_server.get_latest_frame("cam1") if self.phone_server else None
+                res2 = self.phone_server.get_latest_frame("cam2") if self.phone_server else None
 
-                if raw_frame is None:
-                    # Informative waiting canvas when phone is not yet streaming
+                if res1 is None and res2 is None:
+                    # Neither camera connected yet: Show clear waiting canvas
+                    waiting_phase += 0.06
+                    raw_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+                    cv2.rectangle(raw_frame, (20, 20), (1260, 700), (35, 40, 50), 2)
+                    url1 = self.phone_server.get_connection_url("cam1") if self.phone_server else "http://.../cam1"
+                    url2 = self.phone_server.get_connection_url("cam2") if self.phone_server else "http://.../cam2"
+
+                    cv2.putText(raw_frame, "KARATE MOTION STUDIO - РЕЖИМ 2 КАМЕР (СИНХРОННЫЙ ЗАХВАТ)", (230, 220), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 71, 87), 2)
+                    cv2.putText(raw_frame, "Для начала захвата подключите 2 смартфона к Wi-Fi:", (320, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (220, 220, 220), 2)
+                    cv2.putText(raw_frame, f"1. Камера 1 (ФРОНТ - лицо/корпус): {url1}", (260, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (16, 185, 129), 2)
+                    cv2.putText(raw_frame, f"2. Камера 2 (СБОКУ - профиль/глубина): {url2}", (260, 410), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (6, 182, 212), 2)
+                    cv2.putText(raw_frame, "Или нажмите 'Камеры / Телефон (QR)' для сканирования QR-кодов", (280, 480), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (160, 170, 180), 1)
+
+                    pulse_r = int(12 + 6 * np.sin(waiting_phase))
+                    cv2.circle(raw_frame, (640, 560), max(2, pulse_r), (255, 71, 87), -1)
+                    cv2.putText(raw_frame, "ОЖИДАНИЕ ПОТОКОВ...", (540, 620), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (140, 150, 160), 2)
+
+                    dummy_fdata = FrameData(frameIndex=frame_idx, timestamp=0.0, joints={})
+                    self.frameCaptured.emit(raw_frame, dummy_fdata, 0.0)
+                    time.sleep(0.04)
+                    continue
+
+                target_h = 720
+                target_half_w = 640
+
+                # 1. Process Cam 1 (Front)
+                if res1 is not None:
+                    f1, fps1 = res1
+                    proc_f1, fdata_front = self.tracker.process_frame(
+                        f1, frame_idx, t_rel, mirror=self.mirror, draw_skeleton=True, fps=fps1
+                    )
+                    h1, w1 = proc_f1.shape[:2]
+                    f1_scaled = cv2.resize(proc_f1, (int(w1 * (target_h / h1)), target_h))
+                    if f1_scaled.shape[1] > target_half_w:
+                        crop_x = (f1_scaled.shape[1] - target_half_w) // 2
+                        f1_scaled = f1_scaled[:, crop_x:crop_x + target_half_w]
+                    elif f1_scaled.shape[1] < target_half_w:
+                        pad_l = (target_half_w - f1_scaled.shape[1]) // 2
+                        pad_r = target_half_w - f1_scaled.shape[1] - pad_l
+                        f1_scaled = cv2.copyMakeBorder(f1_scaled, 0, 0, pad_l, pad_r, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+                else:
+                    # Cam 1 waiting placeholder tile on the left
+                    f1_scaled = np.zeros((target_h, target_half_w, 3), dtype=np.uint8)
+                    cv2.rectangle(f1_scaled, (10, 10), (target_half_w - 10, target_h - 10), (20, 45, 30), 2)
+                    cv2.putText(f1_scaled, "КАМЕРА 1 (ФРОНТ)", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (16, 185, 129), 2)
+                    cv2.putText(f1_scaled, "Ожидание подключения...", (40, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (160, 170, 180), 1)
+                    fdata_front = FrameData(frameIndex=frame_idx, timestamp=0.0, joints={}, tracking_loss=True)
+
+                # Cam 1 badge
+                cv2.rectangle(f1_scaled, (15, 15), (340, 52), (18, 22, 32), -1)
+                cv2.rectangle(f1_scaled, (15, 15), (340, 52), (16, 185, 129), 2)
+                cv2.circle(f1_scaled, (32, 34), 6, (16, 185, 129), -1)
+                cv2.putText(f1_scaled, "КАМЕРА 1: ФРОНТАЛЬНАЯ", (46, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2)
+
+                # 2. Process Cam 2 (Side)
+                if res2 is not None:
+                    f2, fps2 = res2
+                    proc_f2, fdata_side = self.tracker_cam2.process_frame(
+                        f2, frame_idx, t_rel, mirror=False, draw_skeleton=True, fps=fps2
+                    )
+                    h2, w2 = proc_f2.shape[:2]
+                    f2_scaled = cv2.resize(proc_f2, (int(w2 * (target_h / h2)), target_h))
+                    if f2_scaled.shape[1] > target_half_w:
+                        crop_x = (f2_scaled.shape[1] - target_half_w) // 2
+                        f2_scaled = f2_scaled[:, crop_x:crop_x + target_half_w]
+                    elif f2_scaled.shape[1] < target_half_w:
+                        pad_l = (target_half_w - f2_scaled.shape[1]) // 2
+                        pad_r = target_half_w - f2_scaled.shape[1] - pad_l
+                        f2_scaled = cv2.copyMakeBorder(f2_scaled, 0, 0, pad_l, pad_r, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+                else:
+                    # Cam 2 waiting placeholder tile on the right
+                    f2_scaled = np.zeros((target_h, target_half_w, 3), dtype=np.uint8)
+                    cv2.rectangle(f2_scaled, (10, 10), (target_half_w - 10, target_h - 10), (20, 35, 45), 2)
+                    cv2.putText(f2_scaled, "КАМЕРА 2 (СБОКУ)", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (6, 182, 212), 2)
+                    cv2.putText(f2_scaled, "Ожидание подключения...", (40, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (160, 170, 180), 1)
+                    fdata_side = FrameData(frameIndex=frame_idx, timestamp=0.0, joints={}, tracking_loss=True)
+
+                # Cam 2 badge
+                cv2.rectangle(f2_scaled, (15, 15), (340, 52), (18, 22, 32), -1)
+                cv2.rectangle(f2_scaled, (15, 15), (340, 52), (6, 182, 212), 2)
+                cv2.circle(f2_scaled, (32, 34), 6, (6, 182, 212), -1)
+                cv2.putText(f2_scaled, "КАМЕРА 2: СБОКУ (3D ГЛУБИНА)", (46, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (255, 255, 255), 2)
+
+                # Multi-Camera 3D Depth Cross-Validation & Fusion
+                # Side camera's horizontal displacement is true physical depth (Z) in performer space!
+                if res1 is not None and res2 is not None and not fdata_side.tracking_loss:
+                    s_joints = fdata_side.joints
+                    f_joints = fdata_front.joints
+                    if "left_knee" in s_joints and "left_hip" in s_joints and "left_knee" in f_joints and "left_hip" in f_joints:
+                        dz_side_l = s_joints["left_knee"][0] - s_joints["left_hip"][0]
+                        target_z_l = f_joints["left_hip"][2] + dz_side_l
+                        f_joints["left_knee"][2] = round(0.55 * f_joints["left_knee"][2] + 0.45 * target_z_l, 4)
+
+                    if "right_knee" in s_joints and "right_hip" in s_joints and "right_knee" in f_joints and "right_hip" in f_joints:
+                        dz_side_r = s_joints["right_knee"][0] - s_joints["right_hip"][0]
+                        target_z_r = f_joints["right_hip"][2] + dz_side_r
+                        f_joints["right_knee"][2] = round(0.55 * f_joints["right_knee"][2] + 0.45 * target_z_r, 4)
+
+                proc_frame = np.hstack([f1_scaled, f2_scaled])
+                fdata = fdata_front if res1 is not None else fdata_side
+
+            elif is_phone:
+                # SINGLE PHONE CAMERA MODE (Cam 1 or Cam 2)
+                cam_id = "cam1" if self.camera_source == "phone:cam1" else "cam2"
+                res = self.phone_server.get_latest_frame(cam_id) if self.phone_server else None
+
+                if res is None:
+                    # Waiting screen
                     waiting_phase += 0.06
                     raw_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
                     cv2.rectangle(raw_frame, (20, 20), (1260, 700), (45, 48, 56), 2)
-                    url_str = self.phone_server.get_connection_url() if self.phone_server else "http://..."
-                    target_role = "Камера 1 (Фронт)" if "cam1" in self.camera_source else ("Камера 2 (Сбоку)" if "cam2" in self.camera_source else "Обе камеры (Фронт + Сбоку)")
+                    url_str = self.phone_server.get_connection_url(cam_id) if self.phone_server else "http://..."
+                    target_role = "Камера 1 (Фронт)" if cam_id == "cam1" else "Камера 2 (Сбоку)"
 
                     cv2.putText(raw_frame, "KARATE MOTION STUDIO - ОЖИДАНИЕ ТЕЛЕФОНА", (340, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 71, 87), 2)
                     cv2.putText(raw_frame, f"Ожидание подключения: {target_role}", (370, 300), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (220, 220, 220), 2)
@@ -154,7 +239,25 @@ class WebcamCaptureThread(QtCore.QThread):
                     self.frameCaptured.emit(raw_frame, dummy_fdata, 0.0)
                     time.sleep(0.04)
                     continue
+
+                raw_frame, _ = res
+                proc_frame, fdata = self.tracker.process_frame(
+                    raw_frame,
+                    frame_idx,
+                    t_rel,
+                    mirror=self.mirror,
+                    draw_skeleton=True,
+                    fps=current_fps,
+                )
+                badge_color = (16, 185, 129) if cam_id == "cam1" else (6, 182, 212)
+                badge_title = "КАМЕРА 1 (ФРОНТ)" if cam_id == "cam1" else "КАМЕРА 2 (СБОКУ)"
+                cv2.rectangle(proc_frame, (15, 15), (280, 52), (18, 22, 32), -1)
+                cv2.rectangle(proc_frame, (15, 15), (280, 52), badge_color, 2)
+                cv2.circle(proc_frame, (32, 34), 6, badge_color, -1)
+                cv2.putText(proc_frame, badge_title, (46, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2)
+
             else:
+                # PC WEBCAM / IP STREAM
                 if cap and cap.isOpened():
                     ok, frame = cap.read()
                     if ok:
@@ -166,15 +269,14 @@ class WebcamCaptureThread(QtCore.QThread):
                     time.sleep(0.05)
                     continue
 
-            t_now = time.time()
-            proc_frame, fdata = self.tracker.process_frame(
-                raw_frame,
-                frame_idx,
-                t_now - self.record_t0 if self.is_recording else 0.0,
-                mirror=self.mirror,
-                draw_skeleton=True,
-                fps=current_fps,
-            )
+                proc_frame, fdata = self.tracker.process_frame(
+                    raw_frame,
+                    frame_idx,
+                    t_rel,
+                    mirror=self.mirror,
+                    draw_skeleton=True,
+                    fps=current_fps,
+                )
 
             if self.is_recording and not fdata.tracking_loss:
                 self.recorded_frames.append(fdata)

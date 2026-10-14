@@ -293,11 +293,11 @@
 
       if (sideKey === "R") {
         const crossReach = Math.max(0, uArm.x); // crossing left (+X)
-        const yOffset = elevate > 0 ? elevate * 0.25 : depress * 0.15;
+        const yOffset = elevate > 0 ? elevate * 0.25 : depress * 0.35;
         vClavicle = new THREE.Vector3(-1.0 + crossReach * 0.35, yOffset, fwdReach * 0.35 + crossReach * 0.25).normalize();
       } else {
         const crossReach = Math.max(0, -uArm.x); // crossing right (-X)
-        const yOffset = elevate > 0 ? elevate * 0.25 : depress * 0.15;
+        const yOffset = elevate > 0 ? elevate * 0.25 : depress * 0.35;
         vClavicle = new THREE.Vector3(1.0 - crossReach * 0.35, yOffset, fwdReach * 0.35 + crossReach * 0.25).normalize();
       }
       alignBone(bone, vClavicle, 0.70);
@@ -499,10 +499,12 @@
           const minConf = 0.08;
           const conf = (name) => (vis[name] !== undefined ? vis[name] : 1.0);
 
-          // --- FULL 3D TORSO & MULTI-SEGMENT SPINE SOLVER ---
-          // Reconstructs authentic 3D spinal flexion, lateral bending, and shoulder twist.
-          // Distributes curvature naturally across Spine (lumbar), Spine1, and Chest (thoracic),
-          // enabling the avatar to bend over forward, reach down, and place hands on knees/legs.
+          // --- FULL 3D PELVIS / HIPS & MULTI-SEGMENT SPINE SOLVER ---
+          // Reconstructs authentic 3D pelvis yaw rotation (Zenkutsu, Kokutsu, Kiba dachi)
+          // and anterior pelvic tilt (hinging forward at the hips to touch knees and legs).
+          // Distributes curvature naturally across Pelvis (Hips: ~35%), Lumbar (Spine: ~45%),
+          // Mid (Spine1: ~75%), and Thoracic (Chest: 100%), enabling the avatar to bend over forward,
+          // reach down, and place hands on knees/legs without distortion.
           let torsoFwdZ = 0.0;
           if (pts["left_hip"] && pts["right_hip"] && pts["left_shoulder"] && pts["right_shoulder"]) {
             const pLSh = pts["left_shoulder"];
@@ -519,6 +521,37 @@
 
             const vSpine = midSh.clone().sub(midHip);
             torsoFwdZ = vSpine.z;
+
+            // 1. Pelvis / Hips Orientation Solver
+            const bHips = getBone("Hips");
+            if (bHips && bHips.restWorldQ) {
+              let vHipsLat = new THREE.Vector3(...pLHp).sub(new THREE.Vector3(...pRHp));
+              if (mirrorAvatar) vHipsLat.x = -vHipsLat.x;
+
+              if (vHipsLat.lengthSq() > 1e-4) {
+                // Pelvic Yaw angle around Y
+                const hipYaw = Math.atan2(vHipsLat.z, vHipsLat.x);
+
+                // Pelvic forward tilt when leaning or bending forward
+                const trunkForwardPitch = Math.atan2(vSpine.z, Math.max(0.08, vSpine.y));
+                // Pelvis absorbs ~35% of trunk forward flexion, hinging naturally at the hips
+                const pelvicTilt = trunkForwardPitch * 0.35;
+
+                // Pelvic Roll around Z (weight shift / lateral tilt)
+                const pelvicRoll = Math.atan2(vHipsLat.y, Math.hypot(vHipsLat.x, vHipsLat.z));
+
+                const eulerHips = new THREE.Euler(-pelvicTilt, hipYaw, pelvicRoll, 'YXZ');
+                const qPelvisDelta = new THREE.Quaternion().setFromEuler(eulerHips);
+                const targetHipsWorldQ = qPelvisDelta.clone().multiply(bHips.restWorldQ);
+
+                const parentWorldQHips = new THREE.Quaternion();
+                if (bHips.parent) bHips.parent.getWorldQuaternion(parentWorldQHips);
+                const targetLocalHips = parentWorldQHips.clone().invert().multiply(targetHipsWorldQ);
+
+                bHips.quaternion.slerp(targetLocalHips, 0.75);
+                bHips.updateMatrixWorld(true);
+              }
+            }
 
             // Perspective slouch filter: only active when standing tall in upright posture
             // When user deliberately bends forward (vSpine.y drops or |vSpine.z| >= 0.08), 100% flexion is preserved!
