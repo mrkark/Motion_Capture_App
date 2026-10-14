@@ -119,8 +119,8 @@ class SkeletonDefinition:
 
 @dataclass
 class FrameData:
-    frame: int
-    time: float
+    frame: int = 0
+    time: float = 0.0
     rootPosition: List[float] = field(default_factory=lambda: [0.0, 0.9, 0.0])
     rootRotation: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 1.0])
     joints: Dict[str, List[float]] = field(default_factory=dict)
@@ -135,6 +135,37 @@ class FrameData:
     )
     landmarks_2d: Dict[str, List[float]] = field(default_factory=dict)
     hands_2d: Dict[str, List[List[float]]] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        frame: int = 0,
+        time: float = 0.0,
+        rootPosition: Optional[List[float]] = None,
+        rootRotation: Optional[List[float]] = None,
+        joints: Optional[Dict[str, List[float]]] = None,
+        confidence: Optional[Dict[str, float]] = None,
+        tracking_loss: bool = False,
+        head: Optional[Dict[str, float]] = None,
+        fingers: Optional[Dict[str, Any]] = None,
+        landmarks_2d: Optional[Dict[str, List[float]]] = None,
+        hands_2d: Optional[Dict[str, List[List[float]]]] = None,
+        **kwargs
+    ):
+        # Support aliases gracefully
+        self.frame = kwargs.get("frameIndex", kwargs.get("frame_idx", frame))
+        self.time = kwargs.get("timestamp", kwargs.get("time_sec", time))
+        self.rootPosition = rootPosition if rootPosition is not None else kwargs.get("rootPosition", [0.0, 0.9, 0.0])
+        self.rootRotation = rootRotation if rootRotation is not None else kwargs.get("rootRotation", [0.0, 0.0, 0.0, 1.0])
+        self.joints = joints if joints is not None else kwargs.get("joints", {})
+        self.confidence = confidence if confidence is not None else kwargs.get("confidence", {})
+        self.tracking_loss = tracking_loss if "tracking_loss" not in kwargs else kwargs["tracking_loss"]
+        self.head = head if head is not None else kwargs.get("head", {"yaw": 0.0, "pitch": 0.0, "roll": 0.0})
+        self.fingers = fingers if fingers is not None else kwargs.get("fingers", {
+            "left": {"thumb": 0.0, "index": 0.0, "middle": 0.0, "ring": 0.0, "pinky": 0.0, "detected": False},
+            "right": {"thumb": 0.0, "index": 0.0, "middle": 0.0, "ring": 0.0, "pinky": 0.0, "detected": False},
+        })
+        self.landmarks_2d = landmarks_2d if landmarks_2d is not None else kwargs.get("landmarks_2d", {})
+        self.hands_2d = hands_2d if hands_2d is not None else kwargs.get("hands_2d", {})
 
 
 @dataclass

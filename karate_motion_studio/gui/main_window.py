@@ -129,7 +129,7 @@ class WebcamCaptureThread(QtCore.QThread):
                     cv2.circle(raw_frame, (640, 560), max(2, pulse_r), (255, 71, 87), -1)
                     cv2.putText(raw_frame, "ОЖИДАНИЕ ПОТОКОВ...", (540, 620), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (140, 150, 160), 2)
 
-                    dummy_fdata = FrameData(frameIndex=frame_idx, timestamp=0.0, joints={})
+                    dummy_fdata = FrameData(frame=frame_idx, time=0.0, joints={})
                     self.frameCaptured.emit(raw_frame, dummy_fdata, 0.0)
                     time.sleep(0.04)
                     continue
@@ -158,7 +158,7 @@ class WebcamCaptureThread(QtCore.QThread):
                     cv2.rectangle(f1_scaled, (10, 10), (target_half_w - 10, target_h - 10), (20, 45, 30), 2)
                     cv2.putText(f1_scaled, "КАМЕРА 1 (ФРОНТ)", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (16, 185, 129), 2)
                     cv2.putText(f1_scaled, "Ожидание подключения...", (40, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (160, 170, 180), 1)
-                    fdata_front = FrameData(frameIndex=frame_idx, timestamp=0.0, joints={}, tracking_loss=True)
+                    fdata_front = FrameData(frame=frame_idx, time=0.0, joints={}, tracking_loss=True)
 
                 # Cam 1 badge
                 cv2.rectangle(f1_scaled, (15, 15), (340, 52), (18, 22, 32), -1)
@@ -187,7 +187,7 @@ class WebcamCaptureThread(QtCore.QThread):
                     cv2.rectangle(f2_scaled, (10, 10), (target_half_w - 10, target_h - 10), (20, 35, 45), 2)
                     cv2.putText(f2_scaled, "КАМЕРА 2 (СБОКУ)", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (6, 182, 212), 2)
                     cv2.putText(f2_scaled, "Ожидание подключения...", (40, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (160, 170, 180), 1)
-                    fdata_side = FrameData(frameIndex=frame_idx, timestamp=0.0, joints={}, tracking_loss=True)
+                    fdata_side = FrameData(frame=frame_idx, time=0.0, joints={}, tracking_loss=True)
 
                 # Cam 2 badge
                 cv2.rectangle(f2_scaled, (15, 15), (340, 52), (18, 22, 32), -1)
@@ -235,7 +235,7 @@ class WebcamCaptureThread(QtCore.QThread):
                     cv2.circle(raw_frame, (640, 520), max(2, pulse_r), (255, 71, 87), -1)
                     cv2.putText(raw_frame, "ОЖИДАНИЕ ВИДЕОПОТОКА...", (520, 580), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (140, 150, 160), 2)
 
-                    dummy_fdata = FrameData(frameIndex=frame_idx, timestamp=0.0, joints={})
+                    dummy_fdata = FrameData(frame=frame_idx, time=0.0, joints={})
                     self.frameCaptured.emit(raw_frame, dummy_fdata, 0.0)
                     time.sleep(0.04)
                     continue

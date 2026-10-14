@@ -895,6 +895,12 @@ class TestKarateMotionStudio(unittest.TestCase):
         q_foot_r = np.array(local_quats["Foot.R"])
         self.assertAlmostEqual(float(np.linalg.norm(q_foot_r)), 1.0, places=2)
 
+        # Verify FrameData accepts both standard and keyword aliases without TypeError
+        f_alias = FrameData(frameIndex=10, timestamp=0.333, tracking_loss=True)
+        self.assertEqual(f_alias.frame, 10)
+        self.assertEqual(f_alias.time, 0.333)
+        self.assertTrue(f_alias.tracking_loss)
+
 
 if __name__ == "__main__":
     unittest.main()
