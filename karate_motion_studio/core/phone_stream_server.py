@@ -453,6 +453,95 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
     }
     .btn-grant:active { opacity: 0.85; }
 
+    /* Tap to start camera overlay (solves mobile autoplay gesture policy) */
+    .tap-start-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(11, 15, 23, 0.88);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 24px;
+      gap: 12px;
+      z-index: 32;
+      cursor: pointer;
+      transition: opacity 0.25s ease;
+    }
+    .tap-start-overlay.hidden {
+      display: none !important;
+    }
+    .tap-icon-ring {
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.15);
+      border: 2px solid var(--theme-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      box-shadow: 0 0 24px var(--theme-glow);
+      animation: pulseTap 2s infinite ease-in-out;
+    }
+    @keyframes pulseTap {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+    }
+    .tap-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: #ffffff;
+      margin: 0;
+    }
+    .tap-sub {
+      font-size: 12.5px;
+      color: #94a3b8;
+      max-width: 280px;
+      line-height: 1.4;
+      margin: 0;
+    }
+    .tap-btn {
+      background: linear-gradient(135deg, var(--theme-color), #059669);
+      color: #000000;
+      font-weight: 800;
+      font-size: 14px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 24px;
+      cursor: pointer;
+      box-shadow: 0 4px 16px var(--theme-glow);
+      margin-top: 4px;
+    }
+    body[data-role="cam2"] .tap-btn {
+      background: linear-gradient(135deg, var(--theme-color), #0284c7);
+      color: #ffffff;
+    }
+    .perm-action-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+    }
+    .btn-subtle {
+      background: #1e2433;
+      color: #cbd5e1;
+      border: 1px solid #374151;
+      border-radius: 10px;
+      padding: 11px 16px;
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      transition: background 0.2s;
+    }
+    .btn-subtle:active {
+      background: #283044;
+    }
+
     /* Bottom Control Deck */
     .controls-deck {
       background: rgba(13, 16, 24, 0.96);
@@ -610,18 +699,30 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       <b>КАМЕРА 1 (ФРОНТ):</b> Установите телефон спереди во весь рост (2-3 метра).
     </div>
 
+    <!-- Tap to Start Camera Overlay (Bypasses Mobile Autoplay Blocks) -->
+    <div id="tapStartOverlay" class="tap-start-overlay">
+      <div class="tap-icon-ring">📹</div>
+      <div class="tap-title">Нажмите для включения камеры</div>
+      <div class="tap-sub">Браузер требует касания экрана для активации видеопотока</div>
+      <button id="tapStartBtn" class="tap-btn" type="button">ВКЛЮЧИТЬ КАМЕРУ</button>
+    </div>
+
     <!-- Permission & Camera Error Card -->
     <div id="permissionCard" class="permission-card">
-      <div style="font-size: 42px;">📷🔒</div>
+      <div style="font-size: 38px;">📷🔒</div>
       <h3 id="permTitle">Доступ к камере смартфона</h3>
       <p id="permDesc">Для передачи видео на ПК необходимо предоставить доступ к камере.</p>
-      <button id="grantCameraBtn" class="btn-grant" type="button">🔓 Разрешить доступ к камере</button>
+      <div class="perm-action-group">
+        <button id="grantCameraBtn" class="btn-grant" type="button">🔓 Разрешить доступ к камере</button>
+        <button id="btnTryFrontCam" class="btn-subtle" type="button">🔄 Переключить на селфи-камеру</button>
+      </div>
       <div class="guide-box">
         <b>Если камера не включается:</b>
         <ol>
           <li>Убедитесь, что страница открыта по <b><a id="permHttpsLink" href="#" style="color:#ff6b81;">HTTPS</a></b>.</li>
-          <li>При предупреждении сертификата нажмите <b>«Дополнительно»</b> → <b>«Перейти на сайт»</b> (Safari: <b>«Показать подробности»</b> → <b>«Посетить этот веб-сайт»</b>).</li>
-          <li>В адресной строке нажмите значок 🔒 или ⚙️ и включите <b>«Камера»</b>.</li>
+          <li>При предупреждении сертификата нажмите <b>«Дополнительно» → «Перейти на сайт»</b> (Safari: <b>«Показать подробности» → «Посетить этот веб-сайт»</b>).</li>
+          <li>В адресной строке нажмите значок 🔒 или ⚙️ / aA и выберите <b>«Камера: Разрешить»</b>.</li>
+          <li>Закройте другие приложения (Instagram, WhatsApp, системную камеру), которые могут занимать объектив.</li>
         </ol>
       </div>
     </div>
@@ -687,6 +788,9 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
     const wakeLockText = document.getElementById('wakeLockText');
     const permissionCard = document.getElementById('permissionCard');
     const grantCameraBtn = document.getElementById('grantCameraBtn');
+    const btnTryFrontCam = document.getElementById('btnTryFrontCam');
+    const tapStartOverlay = document.getElementById('tapStartOverlay');
+    const tapStartBtn = document.getElementById('tapStartBtn');
     const insecureBanner = document.getElementById('insecureBanner');
     const httpsSwitchLink = document.getElementById('httpsSwitchLink');
     const permHttpsLink = document.getElementById('permHttpsLink');
@@ -784,7 +888,7 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         throw new Error('SECURE_CONTEXT_REQUIRED');
       }
 
-      // Tier 1: requested resolution and facing mode
+      // Tier 1: requested resolution and ideal facing mode
       try {
         return await navigator.mediaDevices.getUserMedia({
           audio: false,
@@ -799,17 +903,41 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         console.warn('Tier 1 constraints failed:', e1);
       }
 
-      // Tier 2: facing mode without resolution requirement
+      // Tier 2: exact facing mode with ideal resolution
       try {
         return await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { facingMode: { ideal: facing } }
+          video: {
+            facingMode: facing,
+            width: { ideal: width },
+            height: { ideal: height }
+          }
         });
       } catch (e2) {
         console.warn('Tier 2 constraints failed:', e2);
       }
 
-      // Tier 3: any video camera on device
+      // Tier 3: facing mode ideal without resolution restriction
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: facing } }
+        });
+      } catch (e3) {
+        console.warn('Tier 3 constraints failed:', e3);
+      }
+
+      // Tier 4: facing mode exact string without resolution restriction
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: facing }
+        });
+      } catch (e4) {
+        console.warn('Tier 4 constraints failed:', e4);
+      }
+
+      // Tier 5: absolute fallback to any video camera on device
       return await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: true
@@ -820,11 +948,14 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       const hasMediaDevices = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
       if (!hasMediaDevices) {
         showPermissionError('SECURE_CONTEXT_REQUIRED', 'Браузер заблокировал доступ к камере по HTTP. Перейдите на защищенный HTTPS.');
-        return;
+        return false;
       }
 
       if (currentStream) {
-        currentStream.getTracks().forEach(t => t.stop());
+        try {
+          currentStream.getTracks().forEach(t => t.stop());
+        } catch (e) {}
+        currentStream = null;
       }
 
       const resChoice = resSelect.value;
@@ -834,13 +965,40 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
 
       try {
         currentStream = await getCameraStream(facingMode, width, height);
+
+        // Required on mobile Safari & Chrome to allow video playback without user gesture denial
+        video.muted = true;
+        video.defaultMuted = true;
+        video.playsInline = true;
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
+        video.setAttribute('muted', '');
+
         video.srcObject = currentStream;
-        await video.play();
+
+        // Ensure video metadata loaded before playing
+        await new Promise((resolve) => {
+          if (video.readyState >= 1) {
+            resolve();
+          } else {
+            video.onloadedmetadata = () => resolve();
+            setTimeout(resolve, 800);
+          }
+        });
+
+        try {
+          await video.play();
+        } catch (playErr) {
+          console.warn('video.play() rejected (autoplay policy), showing tap overlay:', playErr);
+          tapStartOverlay.classList.remove('hidden');
+          return false;
+        }
+
+        tapStartOverlay.classList.add('hidden');
+        hidePermissionError();
 
         // Apply visual mirroring only if front selfie camera is active
         video.classList.toggle('mirrored', facingMode === 'user');
-
-        hidePermissionError();
 
         const track = currentStream.getVideoTracks()[0];
         const settings = track.getSettings ? track.getSettings() : {};
@@ -857,9 +1015,12 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         }
 
         requestWakeLock();
+        return true;
       } catch (err) {
         console.error('Camera init error:', err);
+        tapStartOverlay.classList.remove('hidden');
         showPermissionError(err.name || 'CameraError', err.message);
+        return false;
       }
     }
 
@@ -872,11 +1033,17 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         title.textContent = '🔒 Требуется защищенный HTTPS';
         desc.innerHTML = `Мобильные браузеры (Safari / Chrome) блокируют доступ к камере по HTTP.<br><br><a href="${httpsUrl}" style="display:inline-block; background:#10b981; color:#fff; padding:10px 16px; border-radius:8px; font-weight:bold; text-decoration:none;">Перейти на HTTPS ➔</a>`;
       } else if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
-        title.textContent = '🚫 Доступ к камере запрещен';
-        desc.textContent = 'Вы запретили браузеру доступ к камере. Нажмите на значок замка в адресной строке и включите «Камера».';
+        title.textContent = '🚫 Доступ к камере ожидает подтверждения';
+        desc.textContent = 'Браузер ожидает разрешения на использование камеры. Нажмите кнопку «Разрешить» ниже или проверьте значок 🔒 в адресной строке.';
+      } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        title.textContent = '📷 Камера не обнаружена';
+        desc.textContent = 'Запрашиваемый модуль камеры не найден на устройстве. Попробуйте переключиться на селфи-камеру.';
+      } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
+        title.textContent = '⚠️ Камера занята другим приложением';
+        desc.textContent = 'Камера используется другим приложением (Instagram, WhatsApp, встроенная камера). Закройте их и повторите.';
       } else {
         title.textContent = '📷 Ошибка доступа к камере';
-        desc.textContent = errMsg || 'Не удалось активировать камеру телефона.';
+        desc.textContent = errMsg || 'Не удалось активировать видеопоток с камеры смартфона.';
       }
     }
 
@@ -884,11 +1051,29 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       permissionCard.style.display = 'none';
     }
 
-    grantCameraBtn.addEventListener('click', initCamera);
-
-    btnFlipCam.addEventListener('click', () => {
-      facingMode = (facingMode === 'environment') ? 'user' : 'environment';
+    grantCameraBtn.addEventListener('click', () => {
+      hidePermissionError();
       initCamera();
+    });
+
+    btnTryFrontCam.addEventListener('click', () => {
+      facingMode = 'user';
+      hidePermissionError();
+      initCamera();
+    });
+
+    tapStartOverlay.addEventListener('click', () => {
+      initCamera();
+    });
+
+    tapStartBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      initCamera();
+    });
+
+    btnFlipCam.addEventListener('click', async () => {
+      facingMode = (facingMode === 'environment') ? 'user' : 'environment';
+      await initCamera();
     });
 
     btnTorch.addEventListener('click', async () => {
@@ -991,8 +1176,14 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       }, 33);
     }
 
-    streamBtn.addEventListener('click', () => {
+    streamBtn.addEventListener('click', async () => {
       if (!isStreaming) {
+        if (!currentStream || !currentStream.active || video.paused || video.readyState < 2) {
+          const ok = await initCamera();
+          if (!ok && (!currentStream || !currentStream.active)) {
+            return;
+          }
+        }
         connectWebSocket();
       } else {
         if (ws) ws.close();
@@ -1197,7 +1388,22 @@ class PhoneStreamServer:
             demo_dir = Path(__file__).resolve().parent.parent / "demo_assets"
             cert_path = demo_dir / "ssl_cert.pem"
             key_path = demo_dir / "ssl_key.pem"
-            if not cert_path.is_file() or not key_path.is_file():
+            needs_new_cert = not cert_path.is_file() or not key_path.is_file()
+
+            if not needs_new_cert:
+                try:
+                    from cryptography import x509
+                    cert_bytes = cert_path.read_bytes()
+                    cert_obj = x509.load_pem_x509_certificate(cert_bytes)
+                    san_ext = cert_obj.extensions.get_extension_for_oid(x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+                    san_ips = [str(ip) for ip in san_ext.value.get_values_for_type(x509.IPAddress)]
+                    san_dns = [str(d) for d in san_ext.value.get_values_for_type(x509.DNSName)]
+                    if self.local_ip not in san_ips and self.local_ip not in san_dns:
+                        needs_new_cert = True
+                except Exception:
+                    needs_new_cert = True
+
+            if needs_new_cert:
                 generate_self_signed_cert(cert_path, key_path, self.local_ip)
 
             if cert_path.is_file() and key_path.is_file():

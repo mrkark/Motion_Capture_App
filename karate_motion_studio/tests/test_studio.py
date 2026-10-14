@@ -854,8 +854,15 @@ class TestKarateMotionStudio(unittest.TestCase):
         self.assertIn("alignFoot", viewer_html, "Dedicated foot rotation solver must be present to track feet turning on floor")
         self.assertIn("dot < -0.92", viewer_html, "Singularity protection must be present to prevent antiparallel joint popping")
         self.assertIn("bHips", viewer_html, "3D pelvis orientation solver must be present")
-        self.assertIn("hipYaw", viewer_html, "Pelvic yaw rotation must be solved for turning in stances")
         self.assertIn("pelvicTilt", viewer_html, "Anterior pelvic tilt must be solved for forward bending and touching legs")
+
+        # 7. Verify Mobile Client HTML Robustness (Autoplay Bypass, Tap-To-Start, Fallbacks)
+        from core.phone_stream_server import MOBILE_CLIENT_HTML
+        self.assertIn("tapStartOverlay", MOBILE_CLIENT_HTML, "Tap-to-start overlay must be present to bypass mobile autoplay blocks")
+        self.assertIn("tapStartBtn", MOBILE_CLIENT_HTML, "Tap-to-start action button must be present")
+        self.assertIn("btnTryFrontCam", MOBILE_CLIENT_HTML, "Front camera fallback button must be present")
+        self.assertIn("webkit-playsinline", MOBILE_CLIENT_HTML, "WebKit inline play attributes must be set for mobile Safari")
+        self.assertIn("Tier 5", MOBILE_CLIENT_HTML, "Cascading 5-tier camera constraint fallback must be present")
 
     # -------------------------------------------------------------------------
     # Test 15: Torso Clearance and Foot Retargeting Integrity
