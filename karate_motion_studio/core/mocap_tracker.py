@@ -39,6 +39,12 @@ import mediapipe as mp
 import numpy as np
 
 
+try:
+    from gui.draw_utils import draw_text_utf8, draw_badge_utf8
+except ImportError:
+    draw_text_utf8 = None
+    draw_badge_utf8 = None
+
 from core.project_schema import (
     STANDARD_JOINTS,
     FrameData,
@@ -46,6 +52,95 @@ from core.project_schema import (
     KarateMotionProject,
 )
 from core.filters import Vector3DOneEuroFilter, OneEuroFilter
+
+
+def calculate_joint_angle_deg(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
+    """Calculates the angle between vector (a - b) and (c - b) in degrees."""
+    v1 = a - b
+    v2 = c - b
+    n1 = float(np.linalg.norm(v1))
+    n2 = float(np.linalg.norm(v2))
+    if n1 < 1e-4 or n2 < 1e-4:
+        return 180.0
+    cos_angle = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
+    return float(np.degrees(np.arccos(cos_angle)))
+
+
+def analyze_karate_biomechanics(joints: Dict[str, List[float]]) -> Dict[str, Any]:
+    """
+    Performs real-time biomechanical analysis of karate posture, angles, and techniques.
+    Returns detected stance, technique, joint angles, and sensei precision score (0-100%).
+    """
+    res = {
+        "stance": "Йой-дати (Готовность)",
+        "technique": "Позиция ожидания",
+        "knee_l": 175.0,
+        "knee_r": 175.0,
+        "elbow_l": 90.0,
+        "elbow_r": 90.0,
+        "score": 92,
+    }
+    if not joints:
+        return res
+
+    get_pt = lambda name: np.array(joints[name]) if name in joints else None
+
+    l_hip, r_hip = get_pt("left_hip"), get_pt("right_hip")
+    l_knee, r_knee = get_pt("left_knee"), get_pt("right_knee")
+    l_ankle, r_ankle = get_pt("left_ankle"), get_pt("right_ankle")
+    l_sh, r_sh = get_pt("left_shoulder"), get_pt("right_shoulder")
+    l_el, r_el = get_pt("left_elbow"), get_pt("right_elbow")
+    l_wr, r_wr = get_pt("left_wrist"), get_pt("right_wrist")
+
+    if l_hip is not None and l_knee is not None and l_ankle is not None:
+        res["knee_l"] = round(calculate_joint_angle_deg(l_hip, l_knee, l_ankle), 1)
+    if r_hip is not None and r_knee is not None and r_ankle is not None:
+        res["knee_r"] = round(calculate_joint_angle_deg(r_hip, r_knee, r_ankle), 1)
+    if l_sh is not None and l_el is not None and l_wr is not None:
+        res["elbow_l"] = round(calculate_joint_angle_deg(l_sh, l_el, l_wr), 1)
+    if r_sh is not None and r_el is not None and r_wr is not None:
+        res["elbow_r"] = round(calculate_joint_angle_deg(r_sh, r_el, r_wr), 1)
+
+    kl = res["knee_l"]
+    kr = res["knee_r"]
+    el = res["elbow_l"]
+    er = res["elbow_r"]
+
+    # Stance Detection
+    if (kl < 125 and kr > 150) or (kr < 125 and kl > 150):
+        lead_leg = "Левая" if kl < kr else "Правая"
+        lead_knee = min(kl, kr)
+        res["stance"] = f"Дзэнкуцу-дати ({lead_leg})"
+        res["score"] = max(60, min(99, int(100 - abs(lead_knee - 98) * 1.4)))
+    elif 100 <= kl <= 135 and 100 <= kr <= 135:
+        res["stance"] = "Киба-дати (Всадник)"
+        avg_knee = (kl + kr) / 2
+        res["score"] = max(65, min(99, int(100 - abs(avg_knee - 115) * 1.6)))
+    elif (kl < 125 and kr > 138) or (kr < 125 and kl > 138):
+        rear_leg = "Левая" if kl < kr else "Правая"
+        res["stance"] = f"Кокуцу-дати ({rear_leg})"
+        res["score"] = 92
+    else:
+        res["stance"] = "Йой-дати (Готовность)"
+        res["score"] = 95
+
+    # Technique & Strike Detection
+    if er > 155 and el < 100:
+        res["technique"] = "Цуки правой (Ой/Гяку)"
+        res["score"] = min(99, res["score"] + 3)
+    elif el > 155 and er < 100:
+        res["technique"] = "Цуки левой (Ой/Гяку)"
+        res["score"] = min(99, res["score"] + 3)
+    elif (l_wr is not None and l_sh is not None and l_wr[1] < l_sh[1] - 0.12) or \
+         (r_wr is not None and r_sh is not None and r_wr[1] < r_sh[1] - 0.12):
+        res["technique"] = "Агэ-укэ (Верхний блок)"
+    elif (l_knee is not None and l_hip is not None and l_knee[1] < l_hip[1] + 0.08) or \
+         (r_knee is not None and r_hip is not None and r_knee[1] < r_hip[1] + 0.08):
+        res["technique"] = "Маэ-гэри (Удар ногой)"
+    elif el < 90 and er < 90:
+        res["technique"] = "Хикитэ / Камаэ"
+
+    return res
 
 # MediaPipe Pose Landmark Indices
 POSE_LM = {name: idx for idx, name in enumerate(STANDARD_JOINTS)}
@@ -747,6 +842,7 @@ class MocapTracker:
                     pad_top,
                     mirror,
                     fps=fps,
+                    frame_data=frame_data,
                 )
             for hand_lms, side in matched_hands:
                 # Left hand in cyan, Right hand in amber
@@ -772,8 +868,9 @@ class MocapTracker:
         pad_top: int,
         mirror: bool,
         fps: float = 0.0,
+        frame_data: Optional[FrameData] = None,
     ):
-        """Draws high-contrast anti-aliased karate skeleton directly on frame using OpenCV."""
+        """Draws high-contrast anti-aliased karate skeleton and biomechanics HUD directly on frame."""
         h, w = frame.shape[:2]
         coords: Dict[str, Tuple[int, int]] = {}
         for name, idx in POSE_LM.items():
@@ -797,6 +894,32 @@ class MocapTracker:
             color = (0, 255, 255) if ("wrist" in name or "ankle" in name) else (255, 255, 255)
             cv2.circle(frame, pt, 5, color, -1, cv2.LINE_AA)
             cv2.circle(frame, pt, 7, (0, 0, 0), 1, cv2.LINE_AA)
+
+        # Real-time Karate Biomechanics & Posture Evaluation
+        metrics = analyze_karate_biomechanics(frame_data.joints if frame_data else {})
+
+        # Draw angle callouts near knees
+        if "left_knee" in coords:
+            cv2.putText(frame, f"{metrics['knee_l']:.0f} deg", (coords["left_knee"][0] + 10, coords["left_knee"][1]),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 180), 1, cv2.LINE_AA)
+        if "right_knee" in coords:
+            cv2.putText(frame, f"{metrics['knee_r']:.0f} deg", (coords["right_knee"][0] + 10, coords["right_knee"][1]),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 180), 1, cv2.LINE_AA)
+
+        # Bottom Sensei HUD banner
+        if coords:
+            hud_y = h - 45
+            cv2.rectangle(frame, (15, hud_y - 25), (w - 15, hud_y + 30), (18, 22, 28), -1)
+            cv2.rectangle(frame, (15, hud_y - 25), (w - 15, hud_y + 30), (212, 175, 55), 1)
+
+            hud_title = f"{metrics['stance']} | {metrics['technique']}"
+            hud_score = f"ОЦЕНКА СЕНСЕЯ: {metrics['score']}%"
+            if draw_text_utf8 is not None:
+                draw_text_utf8(frame, hud_title, (25, hud_y - 18), font_size=16, color=(56, 189, 248))
+                draw_text_utf8(frame, hud_score, (w - 260, hud_y - 18), font_size=16, color=(16, 185, 129))
+            else:
+                cv2.putText(frame, f"{metrics['stance']} | Score: {metrics['score']}%", (25, hud_y + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (16, 185, 129), 2, cv2.LINE_AA)
 
         # Status HUD
         if fps > 0.0 or coords:
