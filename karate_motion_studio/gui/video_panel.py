@@ -213,7 +213,7 @@ class VideoPanel(QtWidgets.QWidget):
         scaled = self._current_qimage.scaled(
             self.viewport.size(),
             QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-            QtCore.Qt.TransformationMode.SmoothTransformation,
+            QtCore.Qt.TransformationMode.FastTransformation,
         )
         self.viewport.setPixmap(QtGui.QPixmap.fromImage(scaled))
 

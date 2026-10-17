@@ -748,9 +748,10 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
 
       <div class="select-wrapper">
         <select id="resSelect">
-          <option value="720p" selected>HD 720p (30 FPS)</option>
+          <option value="540p" selected>⚡ Турбо 540p (Мин. задержка)</option>
+          <option value="720p">HD 720p (Баланс)</option>
+          <option value="480p">SD 480p (Макс. FPS)</option>
           <option value="1080p">Full HD 1080p</option>
-          <option value="480p">SD 480p (Низкий пинг)</option>
         </select>
         <div class="select-arrow">▼</div>
       </div>
@@ -959,8 +960,9 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       }
 
       const resChoice = resSelect.value;
-      let width = 1280, height = 720;
+      let width = 960, height = 540;
       if (resChoice === '1080p') { width = 1920; height = 1080; }
+      else if (resChoice === '720p') { width = 1280; height = 720; }
       else if (resChoice === '480p') { width = 640; height = 480; }
 
       try {
@@ -1051,24 +1053,26 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       permissionCard.style.display = 'none';
     }
 
-    grantCameraBtn.addEventListener('click', () => {
+    async function startCameraAndStream() {
       hidePermissionError();
-      initCamera();
-    });
+      const ok = await initCamera();
+      if (ok || (currentStream && currentStream.active)) {
+        connectWebSocket();
+      }
+    }
 
-    btnTryFrontCam.addEventListener('click', () => {
+    grantCameraBtn.addEventListener('click', startCameraAndStream);
+
+    btnTryFrontCam.addEventListener('click', async () => {
       facingMode = 'user';
-      hidePermissionError();
-      initCamera();
+      startCameraAndStream();
     });
 
-    tapStartOverlay.addEventListener('click', () => {
-      initCamera();
-    });
+    tapStartOverlay.addEventListener('click', startCameraAndStream);
 
     tapStartBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      initCamera();
+      startCameraAndStream();
     });
 
     btnFlipCam.addEventListener('click', async () => {
@@ -1103,13 +1107,25 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       }
     });
 
-    resSelect.addEventListener('change', initCamera);
+    resSelect.addEventListener('change', async () => {
+      await initCamera();
+    });
+
+    let userStoppedStreaming = false;
+    let reconnectTimeout = null;
+    let isEncoding = false;
+    let lastFrameTime = performance.now();
 
     function connectWebSocket() {
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+      }
       if (ws) {
         try { ws.close(); } catch (e) {}
       }
 
+      userStoppedStreaming = false;
       const role = roleSelect.value;
       const host = window.location.host;
       const protocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
@@ -1126,18 +1142,34 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         streamBtnText.textContent = 'ОСТАНОВИТЬ ЭФИР';
         document.body.classList.add('is-live');
         isStreaming = true;
+        isEncoding = false;
+        lastFrameTime = performance.now();
         requestWakeLock();
-        scheduleNextFrame();
+        requestNextFrame();
       };
 
       ws.onclose = () => {
         statusBadge.classList.remove('live');
-        statusText.textContent = 'Готов';
-        streamBtn.classList.remove('streaming');
-        streamBtnIcon.textContent = '▶';
-        streamBtnText.textContent = 'НАЧАТЬ ЭФИР';
         document.body.classList.remove('is-live');
         isStreaming = false;
+        isEncoding = false;
+
+        if (userStoppedStreaming) {
+          statusText.textContent = 'Готов';
+          streamBtn.classList.remove('streaming');
+          streamBtnIcon.textContent = '▶';
+          streamBtnText.textContent = 'НАЧАТЬ ЭФИР';
+        } else {
+          // Unexpected drop / Wi-Fi jitter: Auto-reconnect seamlessly!
+          statusText.textContent = 'Переподключение...';
+          streamBtnIcon.textContent = '🔄';
+          streamBtnText.textContent = 'ПЕРЕПОДКЛЮЧЕНИЕ...';
+          reconnectTimeout = setTimeout(() => {
+            if (!userStoppedStreaming) {
+              connectWebSocket();
+            }
+          }, 1500);
+        }
       };
 
       ws.onerror = (e) => {
@@ -1148,51 +1180,94 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
     function scheduleNextFrame() {
       if (!isStreaming || !ws || ws.readyState !== WebSocket.OPEN) return;
 
-      // Throttle to 30 FPS (~33ms)
-      setTimeout(() => {
-        if (!isStreaming || ws.readyState !== WebSocket.OPEN) return;
-        if (video.videoWidth > 0 && video.videoHeight > 0) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          canvas.toBlob((blob) => {
-            if (blob && isStreaming && ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(blob);
-              frameCount++;
-              totalFramesSent++;
-              chipCount.textContent = `📦 ${totalFramesSent} кадров`;
+      // Zero-Buffer Backpressure: skip capture only if queue is seriously backed up (> 256KB)
+      // This guarantees minimal latency without stalling on normal Wi-Fi frame sizes
+      if (ws.bufferedAmount > 262144 || isEncoding) {
+        requestNextFrame();
+        return;
+      }
 
-              const now = performance.now();
-              if (now - fpsTimer >= 1000) {
-                const fps = (frameCount * 1000) / (now - fpsTimer);
-                chipFps.textContent = `⚡ ${fps.toFixed(1)} FPS`;
-                frameCount = 0;
-                fpsTimer = now;
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        isEncoding = true;
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          const resChoice = resSelect.value;
+          let quality = 0.58;
+          if (resChoice === '1080p') quality = 0.75;
+          else if (resChoice === '720p') quality = 0.65;
+          else if (resChoice === '480p') quality = 0.50;
+
+          canvas.toBlob((blob) => {
+            isEncoding = false;
+            try {
+              if (blob && isStreaming && ws && ws.readyState === WebSocket.OPEN) {
+                if (ws.bufferedAmount <= 262144) {
+                  ws.send(blob);
+                  lastFrameTime = performance.now();
+                  frameCount++;
+                  totalFramesSent++;
+                  chipCount.textContent = `📦 ${totalFramesSent} кадров`;
+
+                  const now = performance.now();
+                  if (now - fpsTimer >= 1000) {
+                    const fps = (frameCount * 1000) / (now - fpsTimer);
+                    chipFps.textContent = `⚡ ${fps.toFixed(1)} FPS`;
+                    frameCount = 0;
+                    fpsTimer = now;
+                  }
+                }
               }
+            } catch (err) {
+              console.warn('Frame send error:', err);
             }
-            scheduleNextFrame();
-          }, 'image/jpeg', 0.75);
-        } else {
-          scheduleNextFrame();
+            requestNextFrame();
+          }, 'image/jpeg', quality);
+        } catch (e) {
+          isEncoding = false;
+          requestNextFrame();
         }
-      }, 33);
+      } else {
+        requestNextFrame();
+      }
     }
+
+    function requestNextFrame() {
+      if (!isStreaming) return;
+      if ('requestVideoFrameCallback' in video) {
+        video.requestVideoFrameCallback(() => scheduleNextFrame());
+      } else {
+        requestAnimationFrame(() => scheduleNextFrame());
+      }
+    }
+
+    // Hardware Watchdog: if stream stalls for > 350ms, kickstart next frame
+    setInterval(() => {
+      if (isStreaming && ws && ws.readyState === WebSocket.OPEN && performance.now() - lastFrameTime > 350) {
+        isEncoding = false;
+        scheduleNextFrame();
+      }
+    }, 250);
 
     streamBtn.addEventListener('click', async () => {
       if (!isStreaming) {
-        if (!currentStream || !currentStream.active || video.paused || video.readyState < 2) {
-          const ok = await initCamera();
-          if (!ok && (!currentStream || !currentStream.active)) {
-            return;
-          }
-        }
-        connectWebSocket();
+        userStoppedStreaming = false;
+        await startCameraAndStream();
       } else {
+        userStoppedStreaming = true;
+        if (reconnectTimeout) clearTimeout(reconnectTimeout);
         if (ws) ws.close();
       }
     });
 
-    // Auto-detect role from URL and initialize camera
+    // Auto-detect role from URL and initialize camera with auto-stream if permission granted
     autoDetectRoleFromUrl();
-    initCamera();
+    (async () => {
+      const ok = await initCamera();
+      if (ok) {
+        connectWebSocket();
+      }
+    })();
   </script>
 </body>
 </html>
@@ -1220,6 +1295,8 @@ class PhoneStreamServer:
         self.frame_fps: Dict[str, float] = {}
         self.frame_counts: Dict[str, int] = {}
         self.fps_timers: Dict[str, float] = {}
+        self.frame_seq: Dict[str, int] = {}
+        self.new_frame_event = threading.Event()
 
         # Callbacks registered by Qt UI
         self.frame_callbacks: List[Callable[[str, np.ndarray, float], None]] = []
@@ -1301,6 +1378,8 @@ class PhoneStreamServer:
                             self.latest_frames[camera_id] = frame_bgr
                             self.frame_timestamps[camera_id] = t_now
                             self.frame_fps[camera_id] = cur_fps
+                            self.frame_seq[camera_id] = self.frame_seq.get(camera_id, 0) + 1
+                        self.new_frame_event.set()
 
                         # Dispatch callback
                         for cb in self.frame_callbacks:
@@ -1330,8 +1409,34 @@ class PhoneStreamServer:
             if camera_id in self.latest_frames:
                 t = self.frame_timestamps.get(camera_id, 0.0)
                 if time.time() - t < 2.0:
-                    return self.latest_frames[camera_id].copy(), self.frame_fps.get(camera_id, 0.0)
+                    return self.latest_frames[camera_id], self.frame_fps.get(camera_id, 0.0)
         return None
+
+    def get_frame_seq(self, camera_id: str) -> int:
+        """Returns the monotonic frame sequence ID for camera_id."""
+        with self.lock:
+            return self.frame_seq.get(camera_id, 0)
+
+    def get_latest_frame_if_new(self, camera_id: str, last_seq: int = -1) -> Optional[Tuple[np.ndarray, float, int]]:
+        """
+        Returns (bgr_frame, fps, current_seq) only if a newer frame than last_seq has arrived.
+        If no newer frame is available, returns None immediately without duplicating memory.
+        """
+        with self.lock:
+            seq = self.frame_seq.get(camera_id, 0)
+            if last_seq >= 0 and seq <= last_seq:
+                return None
+            if camera_id in self.latest_frames:
+                t = self.frame_timestamps.get(camera_id, 0.0)
+                if time.time() - t < 2.0:
+                    return self.latest_frames[camera_id], self.frame_fps.get(camera_id, 0.0), seq
+        return None
+
+    def wait_for_frame(self, timeout: float = 0.033) -> bool:
+        """Blocks until a new camera frame is received or timeout expires."""
+        signaled = self.new_frame_event.wait(timeout)
+        self.new_frame_event.clear()
+        return signaled
 
     def get_connected_cameras(self) -> List[str]:
         """Returns list of active camera IDs (e.g. ['cam1', 'cam2'])."""

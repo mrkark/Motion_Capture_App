@@ -261,14 +261,15 @@ def estimate_fist_curl_from_pose(wrist: List[float], index: List[float], elbow: 
 class MocapTracker:
     """Unified Motion Capture Tracker using MediaPipe Pose & Hands."""
 
-    def __init__(self, track_hands: bool = True):
+    def __init__(self, track_hands: bool = True, model_complexity: int = 1):
         self.track_hands = track_hands
+        self.model_complexity = model_complexity
 
         # MediaPipe models
         with SilenceStderr():
             self.mp_pose = mp.solutions.pose.Pose(
                 static_image_mode=False,
-                model_complexity=1,
+                model_complexity=model_complexity,
                 smooth_landmarks=True,
                 enable_segmentation=False,
                 min_detection_confidence=0.5,
