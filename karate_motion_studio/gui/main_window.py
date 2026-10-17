@@ -56,19 +56,27 @@ QMenu::item:selected { background-color: #383b44; }
 
 
 class WebcamCaptureThread(QtCore.QThread):
-    """Background thread streaming frames from webcam or wireless phone camera without blocking Qt GUI."""
+    """Background thread streaming frames from wireless phone camera without blocking Qt GUI."""
 
     frameCaptured = QtCore.pyqtSignal(object, object, float)  # (bgr_frame, frame_data, fps)
 
     def __init__(
         self,
-        camera_source: str = "0",
+        camera_source: str = "phone:cam1",
         mirror: bool = False,
         track_hands: bool = True,
         phone_server: Optional[PhoneStreamServer] = None,
     ):
         super().__init__()
-        self.camera_source = str(camera_source)
+        # Laptop webcam is disabled to enforce phone camera mocap accuracy
+        try:
+            int(camera_source)
+            self.camera_source = "phone:cam1"
+        except ValueError:
+            self.camera_source = str(camera_source)
+        if not self.camera_source.startswith("phone:") and not self.camera_source.startswith("dual") and not self.camera_source.startswith("http") and not self.camera_source.startswith("rtsp"):
+            self.camera_source = "phone:cam1"
+
         self.mirror = mirror
         self.track_hands = track_hands
         self.phone_server = phone_server
@@ -88,16 +96,9 @@ class WebcamCaptureThread(QtCore.QThread):
 
         is_phone = self.camera_source.startswith("phone:") or self.camera_source.startswith("dual")
 
-        if not is_phone:
-            # PC webcam index or IP stream URL
-            try:
-                idx = int(self.camera_source)
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW if cv2.CAP_DSHOW else cv2.CAP_ANY)
-                if not cap.isOpened():
-                    cap = cv2.VideoCapture(idx)
-            except ValueError:
-                # String URL (e.g. rtsp:// or http://)
-                cap = cv2.VideoCapture(self.camera_source)
+        if not is_phone and (self.camera_source.startswith("http") or self.camera_source.startswith("rtsp")):
+            # Optional IP stream URL (e.g. rtsp:// or http://)
+            cap = cv2.VideoCapture(self.camera_source)
 
         fps_timer = time.time()
         fps_counter = 0
@@ -122,15 +123,16 @@ class WebcamCaptureThread(QtCore.QThread):
                     url1 = self.phone_server.get_connection_url("cam1") if self.phone_server else "http://.../cam1"
                     url2 = self.phone_server.get_connection_url("cam2") if self.phone_server else "http://.../cam2"
 
-                    draw_text_utf8(raw_frame, "KARATE MOTION STUDIO - РЕЖИМ 2 КАМЕР (СИНХРОННЫЙ ЗАХВАТ)", (230, 200), font_size=24, color=(255, 71, 87))
-                    draw_text_utf8(raw_frame, "Для начала захвата подключите 2 смартфона к Wi-Fi:", (320, 260), font_size=20, color=(220, 220, 220))
-                    draw_text_utf8(raw_frame, f"1. Камера 1 (ФРОНТ - лицо/корпус): {url1}", (260, 340), font_size=19, color=(16, 185, 129))
-                    draw_text_utf8(raw_frame, f"2. Камера 2 (СБОКУ - профиль/глубина): {url2}", (260, 390), font_size=19, color=(6, 182, 212))
-                    draw_text_utf8(raw_frame, "Или нажмите 'Камеры / Телефон (QR)' для сканирования QR-кодов", (280, 460), font_size=17, color=(160, 170, 180))
+                    draw_text_utf8(raw_frame, "KARATE MOTION STUDIO - РЕЖИМ 2 СМАРТФОНОВ (3D ЗАХВАТ)", (210, 190), font_size=24, color=(255, 71, 87))
+                    draw_text_utf8(raw_frame, "Встроенная веб-камера ноутбука отключена для чистоты 3D трекинга.", (240, 240), font_size=18, color=(200, 205, 215))
+                    draw_text_utf8(raw_frame, "Для синхронного захвата подключите 2 смартфона к Wi-Fi:", (300, 280), font_size=19, color=(220, 220, 220))
+                    draw_text_utf8(raw_frame, f"1. Камера 1 (ФРОНТ - лицо/корпус): {url1}", (260, 350), font_size=19, color=(16, 185, 129))
+                    draw_text_utf8(raw_frame, f"2. Камера 2 (СБОКУ - профиль/глубина): {url2}", (260, 400), font_size=19, color=(6, 182, 212))
+                    draw_text_utf8(raw_frame, "Или нажмите 'Камеры / Телефон (QR)' для сканирования QR-кодов", (280, 470), font_size=17, color=(160, 170, 180))
 
                     pulse_r = int(12 + 6 * np.sin(waiting_phase))
                     cv2.circle(raw_frame, (640, 540), max(2, pulse_r), (255, 71, 87), -1)
-                    draw_text_utf8(raw_frame, "ОЖИДАНИЕ ПОТОКОВ...", (520, 580), font_size=18, color=(140, 150, 160))
+                    draw_text_utf8(raw_frame, "ОЖИДАНИЕ ПОТОКОВ СО СМАРТФОНОВ...", (480, 580), font_size=18, color=(140, 150, 160))
 
                     dummy_fdata = FrameData(frame=frame_idx, time=0.0, joints={})
                     self.frameCaptured.emit(raw_frame, dummy_fdata, 0.0)
@@ -247,16 +249,16 @@ class WebcamCaptureThread(QtCore.QThread):
                     raw_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
                     cv2.rectangle(raw_frame, (20, 20), (1260, 700), (45, 48, 56), 2)
                     url_str = self.phone_server.get_connection_url(cam_id) if self.phone_server else "http://..."
-                    target_role = "Камера 1 (Фронт)" if cam_id == "cam1" else "Камера 2 (Сбоку)"
-
-                    draw_text_utf8(raw_frame, "KARATE MOTION STUDIO - ОЖИДАНИЕ ТЕЛЕФОНА", (320, 220), font_size=24, color=(255, 71, 87))
-                    draw_text_utf8(raw_frame, f"Ожидание подключения: {target_role}", (360, 280), font_size=20, color=(220, 220, 220))
+                    draw_text_utf8(raw_frame, "KARATE MOTION STUDIO - ПОДКЛЮЧЕНИЕ ТЕЛЕФОНА", (300, 200), font_size=24, color=(255, 71, 87))
+                    draw_text_utf8(raw_frame, "Встроенная веб-камера ноутбука отключена для чистоты 3D трекинга.", (280, 250), font_size=18, color=(200, 205, 215))
+                    draw_text_utf8(raw_frame, f"Ожидание подключения: {target_role}", (360, 300), font_size=20, color=(220, 220, 220))
                     draw_text_utf8(raw_frame, f"1. Подключите телефон к Wi-Fi и откройте: {url_str}", (260, 360), font_size=19, color=(46, 213, 115))
-                    draw_text_utf8(raw_frame, "2. Или нажмите 'Камеры / Телефон (QR)' в панели и отсканируйте QR-код", (230, 420), font_size=17, color=(180, 180, 180))
+                    draw_text_utf8(raw_frame, "2. На телефоне доступна кнопка «🎬 ЗАПИСАТЬ АНИМАЦИЮ» для съёмки техники", (220, 410), font_size=17, color=(16, 185, 129))
+                    draw_text_utf8(raw_frame, "3. Или нажмите 'Камеры / Телефон (QR)' в панели и отсканируйте QR-код", (240, 460), font_size=16, color=(180, 180, 180))
 
                     pulse_r = int(12 + 6 * np.sin(waiting_phase))
-                    cv2.circle(raw_frame, (640, 510), max(2, pulse_r), (255, 71, 87), -1)
-                    draw_text_utf8(raw_frame, "ОЖИДАНИЕ ВИДЕОПОТОКА...", (510, 560), font_size=18, color=(140, 150, 160))
+                    cv2.circle(raw_frame, (640, 520), max(2, pulse_r), (255, 71, 87), -1)
+                    draw_text_utf8(raw_frame, "ОЖИДАНИЕ ВИДЕОПОТОКА...", (510, 570), font_size=18, color=(140, 150, 160))
 
                     dummy_fdata = FrameData(frame=frame_idx, time=0.0, joints={})
                     self.frameCaptured.emit(raw_frame, dummy_fdata, 0.0)
@@ -341,6 +343,8 @@ class WebcamCaptureThread(QtCore.QThread):
 class MainWindow(QtWidgets.QMainWindow):
     """Karate Motion Studio Main Application Window."""
 
+    remote_record_signal = QtCore.pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Karate Motion Studio — Захват движений карате Shotokan")
@@ -359,8 +363,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.video_path: Optional[str] = None
         self.webcam_thread: Optional[WebcamCaptureThread] = None
 
-        # Settings
-        self.camera_source = "0"
+        # Settings (Laptop webcam is excluded, phone camera is enforced)
+        self.camera_source = "phone:cam1"
         self.camera_index = 0
         self.mirror_webcam = False
         self.avatar_mirror = False
@@ -368,6 +372,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Phone Stream Server for wireless smartphone mocap (zero-app install)
         self.phone_server = PhoneStreamServer(port=8088)
+        self.phone_server.set_record_command_handler(lambda action: self.remote_record_signal.emit(action))
+        self.remote_record_signal.connect(self._handle_remote_record)
         self.phone_server.start()
 
         self._setup_menus_and_toolbars()
@@ -437,7 +443,7 @@ class MainWindow(QtWidgets.QMainWindow):
         toolbar.addWidget(self.btn_load_video)
 
         self.btn_toggle_webcam = QtWidgets.QToolButton()
-        self.btn_toggle_webcam.setText("🔴 Веб-камера")
+        self.btn_toggle_webcam.setText("📱 Камера смартфона")
         self.btn_toggle_webcam.setCheckable(True)
         self.btn_toggle_webcam.clicked.connect(self.toggle_webcam)
         toolbar.addWidget(self.btn_toggle_webcam)
@@ -453,10 +459,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "QComboBox { background-color: #2b2d33; color: #dfdfe0; border: 1px solid #3c404c; border-radius: 3px; padding: 3px 6px; font-size: 8.5pt; }"
             "QComboBox::drop-down { border: none; width: 14px; }"
         )
-        self.combo_cam_source.addItem("💻 Веб-камера ПК", "0")
-        self.combo_cam_source.addItem("📱 Смартфон 1 (Фронт)", "phone:cam1")
-        self.combo_cam_source.addItem("📱 Смартфон 2 (Сбоку)", "phone:cam2")
-        self.combo_cam_source.addItem("🔀 Две камеры (Фронт + Сбоку)", "dual:phone+phone")
+        self.combo_cam_source.addItem("📱 Смартфон 1 (Фронт — лицо/корпус)", "phone:cam1")
+        self.combo_cam_source.addItem("📱 Смартфон 2 (Сбоку — профиль/глубина)", "phone:cam2")
+        self.combo_cam_source.addItem("🔀 Две камеры смартфонов (Синхронный 3D)", "dual:phone+phone")
         self.combo_cam_source.currentIndexChanged.connect(self._on_combo_cam_source_changed)
         toolbar.addWidget(self.combo_cam_source)
 
@@ -656,7 +661,23 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Ошибка анализа видео", str(e))
             self.status.showMessage("Ошибка анализа видео.")
 
-    # --- MODE B: REAL-TIME WEBCAM CAPTURE ---
+    # --- MODE B: REAL-TIME PHONE CAMERA CAPTURE ---
+    def _handle_remote_record(self, action: str):
+        """Processes remote start/stop recording requests dispatched from mobile phone."""
+        if action == "start":
+            if not self.webcam_thread or not self.webcam_thread.isRunning():
+                self.start_webcam()
+            if self.webcam_thread and not self.webcam_thread.is_recording:
+                self.webcam_thread.start_recording()
+                self.btn_record.setText("⏹ Стоп (REC)")
+                self.btn_record.setStyleSheet("background-color: #e05260; color: #fff; font-weight: bold;")
+                self.status.showMessage("🔴 Идет запись анимации движения со смартфона...")
+                if self.phone_server:
+                    self.phone_server.notify_recording_started()
+        elif action == "stop":
+            if self.webcam_thread and self.webcam_thread.is_recording:
+                self.toggle_recording()
+
     def toggle_webcam(self, checked: bool):
         if checked:
             self.start_webcam()
@@ -670,7 +691,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.current_source_mode = "webcam"
         self.btn_toggle_webcam.setChecked(True)
-        self.btn_toggle_webcam.setText("⏹ Выключить камеру")
+        self.btn_toggle_webcam.setText("⏹ Отключить камеру")
         self.btn_record.setEnabled(True)
 
         self.webcam_thread = WebcamCaptureThread(
@@ -681,8 +702,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.webcam_thread.frameCaptured.connect(self._on_webcam_frame)
         self.webcam_thread.start()
-        source_label = "Смартфон" if self.camera_source.startswith("phone:") else ("Две камеры" if self.camera_source.startswith("dual") else "Веб-камера")
-        self.status.showMessage(f"Поток запущен ({source_label}). Аватар повторяет движения в реальном времени.")
+        source_label = "Камера смартфона (Фронт)" if self.camera_source == "phone:cam1" else ("Камера смартфона (Сбоку)" if self.camera_source == "phone:cam2" else "2 смартфона (Синхронный 3D захват)")
+        self.status.showMessage(f"Поток запущен ({source_label}). 3D аватар повторяет движения в реальном времени.")
 
     def open_camera_manager_dialog(self):
         dlg = CameraManagerDialog(self.phone_server, active_source=self.camera_source, parent=self)
@@ -719,7 +740,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.webcam_thread.stop()
             self.webcam_thread = None
         self.btn_toggle_webcam.setChecked(False)
-        self.btn_toggle_webcam.setText("🔴 Веб-камера")
+        self.btn_toggle_webcam.setText("📱 Камера смартфона")
         self.btn_record.setEnabled(False)
         self.btn_record.setText("⏺ Запись")
         self.current_source_mode = "idle"
@@ -752,19 +773,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.webcam_thread.start_recording()
             self.btn_record.setText("⏹ Стоп (REC)")
             self.btn_record.setStyleSheet("background-color: #e05260; color: #fff; font-weight: bold;")
-            self.status.showMessage("Идет запись движения с веб-камеры...")
+            self.status.showMessage("🔴 Идет запись движений карате со смартфона...")
+            if self.phone_server:
+                self.phone_server.notify_recording_started()
         else:
             recorded = self.webcam_thread.stop_recording()
             self.btn_record.setText("⏺ Запись")
             self.btn_record.setStyleSheet("background-color: #2b2d33; color: #ff6b6b;")
 
+            if self.phone_server:
+                self.phone_server.notify_recording_finished(len(recorded))
+
             if recorded:
                 meta_vals = self.metadata_widget.get_metadata_values()
                 meta = Metadata(
-                    name="webcam_capture",
-                    technique=meta_vals["technique"],
-                    tags=meta_vals["tags"],
-                    sourceType="webcam",
+                    name="phone_capture",
+                    technique=meta_vals.get("technique", "Karate Technique"),
+                    tags=meta_vals.get("tags", ["karate", "phone_mocap"]),
+                    sourceType="phone_camera",
                     fps=30.0,
                     frameCount=len(recorded),
                     trimRange=[0, len(recorded) - 1],
@@ -772,9 +798,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.project = KarateMotionProject(metadata=meta, rawFrames=recorded)
                 self.retargeter.retarget_project(self.project)
                 self._sync_project_to_ui()
-                self.status.showMessage(f"Запись завершена: сохранено {len(recorded)} кадров на таймлайн.")
+                self.status.showMessage(f"🎉 Запись со смартфона завершена: {len(recorded)} кадров сохранено на таймлайн и 3D аватар.")
             else:
-                self.status.showMessage("Запись пуста (не обнаружен человек).")
+                self.status.showMessage("Запись пуста (не обнаружен человек в кадре).")
 
     # --- CALIBRATION & FILTERING ---
     def calibrate_posture(self):
@@ -902,8 +928,8 @@ class MainWindow(QtWidgets.QMainWindow):
         dlg = SettingsDialog(self)
         if dlg.exec():
             cfg = dlg.get_settings()
-            self.camera_index = cfg["camera_index"]
-            self.camera_source = str(self.camera_index)
+            new_src = cfg.get("camera_source", "phone:cam1")
+            self._on_camera_source_selected(new_src)
             self.mirror_webcam = cfg["mirror"]
             self.blender_exe = cfg["blender_exe"]
             self.status.showMessage("Настройки обновлены.")

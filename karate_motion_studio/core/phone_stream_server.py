@@ -9,9 +9,12 @@ import os
 import sys
 import io
 import time
+import json
+import asyncio
 import socket
 import threading
-from typing import Dict, Optional, Callable, List, Tuple, Any
+from contextlib import asynccontextmanager
+from typing import Dict, Optional, Callable, List, Tuple, Any, Set
 from pathlib import Path
 import numpy as np
 import cv2
@@ -557,25 +560,122 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
 
     .main-action-row {
       display: flex;
-      gap: 10px;
+      gap: 8px;
     }
 
-    .btn-stream {
-      flex: 1;
-      background: linear-gradient(135deg, var(--theme-color), #059669);
+    .btn-record-anim {
+      flex: 1.5;
+      background: linear-gradient(135deg, #ef4444, #b91c1c);
       color: #ffffff;
-      border: none;
+      border: 2px solid rgba(255, 255, 255, 0.2);
       border-radius: 12px;
-      padding: 14px 20px;
-      font-size: 16px;
+      padding: 13px 14px;
+      font-size: 14.5px;
       font-weight: 800;
       cursor: pointer;
       display: flex;
       justify-content: center;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      letter-spacing: 0.3px;
+      box-shadow: 0 4px 18px rgba(239, 68, 68, 0.45);
+      transition: all 0.2s ease;
+    }
+    .btn-record-anim:active {
+      transform: scale(0.97);
+    }
+    .btn-record-anim.recording {
+      background: #11141d;
+      border: 2px solid #ef4444;
+      color: #ef4444;
+      box-shadow: 0 0 16px rgba(239, 68, 68, 0.6);
+      animation: pulseRedRecord 1.2s infinite;
+    }
+
+    @keyframes pulseRedRecord {
+      0%, 100% { box-shadow: 0 0 16px rgba(239, 68, 68, 0.7); transform: scale(1); }
+      50% { box-shadow: 0 0 5px rgba(239, 68, 68, 0.3); transform: scale(0.985); }
+    }
+
+    .rec-live-badge {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(220, 38, 38, 0.94);
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 12.5px;
+      padding: 5px 14px;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 30;
+      box-shadow: 0 4px 16px rgba(220, 38, 38, 0.6);
       letter-spacing: 0.5px;
-      box-shadow: 0 6px 20px var(--theme-glow);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    .rec-live-badge.hidden { display: none !important; }
+    .rec-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #ffffff;
+      animation: blinkDot 0.9s infinite alternate;
+    }
+    @keyframes blinkDot {
+      0% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0.2; transform: scale(0.7); }
+    }
+
+    .rec-toast {
+      position: absolute;
+      bottom: 20px;
+      left: 14px;
+      right: 14px;
+      background: rgba(15, 23, 42, 0.97);
+      border: 2px solid #10b981;
+      border-radius: 14px;
+      padding: 16px;
+      text-align: center;
+      z-index: 55;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.85);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
+    .rec-toast.hidden { display: none !important; }
+    .rec-toast-icon { font-size: 30px; margin-bottom: 4px; }
+    .rec-toast-title { font-size: 16px; font-weight: 800; color: #10b981; margin-bottom: 4px; }
+    .rec-toast-desc { font-size: 12.5px; color: #cbd5e1; line-height: 1.45; margin-bottom: 10px; }
+    .toast-close-btn {
+      background: #10b981;
+      color: #000;
+      font-weight: 800;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 20px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .btn-stream {
+      flex: 0.9;
+      background: linear-gradient(135deg, var(--theme-color), #059669);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      padding: 13px 12px;
+      font-size: 13.5px;
+      font-weight: 800;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 6px;
+      letter-spacing: 0.4px;
+      box-shadow: 0 4px 16px var(--theme-glow);
       transition: all 0.2s ease;
     }
     body[data-role="cam2"] .btn-stream {
@@ -585,8 +685,9 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
       transform: scale(0.98);
     }
     .btn-stream.streaming {
-      background: linear-gradient(135deg, #ef4444, #dc2626);
-      box-shadow: 0 6px 20px var(--danger-glow);
+      background: linear-gradient(135deg, #475569, #334155);
+      box-shadow: none;
+      color: #94a3b8;
     }
 
     .settings-row {
@@ -670,6 +771,20 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
     <video id="videoPreview" autoplay playsinline muted></video>
     <canvas id="captureCanvas"></canvas>
 
+    <!-- Floating Recording Live Badge -->
+    <div id="recLiveBadge" class="rec-live-badge hidden">
+      <div class="rec-dot"></div>
+      <span id="recTimerText">REC 00:00</span>
+    </div>
+
+    <!-- Success Toast on Recording Complete -->
+    <div id="recToast" class="rec-toast hidden">
+      <div class="rec-toast-icon">🥋✨</div>
+      <div class="rec-toast-title">Анимация успешно сохранена!</div>
+      <div id="recToastDesc" class="rec-toast-desc">Записано кадров. Перейдите к ноутбуку — 3D аватар уже воспроизводит вашу технику!</div>
+      <button id="toastCloseBtn" class="toast-close-btn" type="button">Понятно</button>
+    </div>
+
     <!-- Stance Alignment Grid -->
     <div class="grid-overlay" id="gridOverlay">
       <div></div><div></div><div></div>
@@ -730,9 +845,13 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
 
   <div class="controls-deck">
     <div class="main-action-row">
+      <button id="btnRecordAnim" class="btn-record-anim" type="button">
+        <span id="btnRecordIcon">🎬</span>
+        <span id="btnRecordText">ЗАПИСАТЬ АНИМАЦИЮ</span>
+      </button>
       <button id="streamBtn" class="btn-stream" type="button">
         <span id="streamBtnIcon">▶</span>
-        <span id="streamBtnText">НАЧАТЬ ЭФИР</span>
+        <span id="streamBtnText">ЭФИР</span>
       </button>
     </div>
 
@@ -800,6 +919,102 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
     const btnToggleGrid = document.getElementById('btnToggleGrid');
     const btnFullscreen = document.getElementById('btnFullscreen');
     const gridOverlay = document.getElementById('gridOverlay');
+
+    const btnRecordAnim = document.getElementById('btnRecordAnim');
+    const btnRecordIcon = document.getElementById('btnRecordIcon');
+    const btnRecordText = document.getElementById('btnRecordText');
+    const recLiveBadge = document.getElementById('recLiveBadge');
+    const recTimerText = document.getElementById('recTimerText');
+    const recToast = document.getElementById('recToast');
+    const recToastDesc = document.getElementById('recToastDesc');
+    const toastCloseBtn = document.getElementById('toastCloseBtn');
+
+    let isRecordingAnim = false;
+    let recStartTime = 0;
+    let recTimerInterval = null;
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    function setRecordingUI(active, savedFrames) {
+      isRecordingAnim = active;
+      if (active) {
+        btnRecordAnim.classList.add('recording');
+        btnRecordIcon.textContent = '⏹';
+        btnRecordText.textContent = 'СТОП (REC)';
+        recLiveBadge.classList.remove('hidden');
+        if (!recTimerInterval) {
+          recStartTime = performance.now();
+          recTimerInterval = setInterval(() => {
+            const elapsed = (performance.now() - recStartTime) / 1000;
+            const timeStr = formatTime(elapsed);
+            recTimerText.textContent = `REC ${timeStr}`;
+            btnRecordText.textContent = `СТОП (${timeStr})`;
+          }, 250);
+        }
+      } else {
+        btnRecordAnim.classList.remove('recording');
+        btnRecordIcon.textContent = '🎬';
+        btnRecordText.textContent = 'ЗАПИСАТЬ АНИМАЦИЮ';
+        recLiveBadge.classList.add('hidden');
+        if (recTimerInterval) {
+          clearInterval(recTimerInterval);
+          recTimerInterval = null;
+        }
+        if (savedFrames && savedFrames > 0) {
+          recToastDesc.textContent = `Записано ${savedFrames} кадров движения. Перейдите к ноутбуку — 3D аватар уже воспроизводит вашу технику!`;
+          recToast.classList.remove('hidden');
+          setTimeout(() => { recToast.classList.add('hidden'); }, 7000);
+        }
+      }
+    }
+
+    toastCloseBtn.addEventListener('click', () => {
+      recToast.classList.add('hidden');
+    });
+
+    async function toggleRecordingFromPhone() {
+      if (!isStreaming) {
+        await startCameraAndStream();
+        await new Promise(r => setTimeout(r, 600));
+      }
+
+      if (!isRecordingAnim) {
+        setRecordingUI(true);
+        try {
+          const resp = await fetch('/api/record/start', { method: 'POST' });
+          if (!resp.ok) setRecordingUI(false);
+        } catch (e) {
+          console.error('Error starting record:', e);
+        }
+      } else {
+        try {
+          const resp = await fetch('/api/record/stop', { method: 'POST' });
+          const data = await resp.json();
+          setRecordingUI(false, data.frames || 0);
+        } catch (e) {
+          console.error('Error stopping record:', e);
+          setRecordingUI(false);
+        }
+      }
+    }
+
+    btnRecordAnim.addEventListener('click', toggleRecordingFromPhone);
+
+    setInterval(async () => {
+      if (isStreaming) {
+        try {
+          const res = await fetch('/api/record/status');
+          const data = await res.json();
+          if (data.is_recording !== isRecordingAnim) {
+            setRecordingUI(data.is_recording, data.frames || 0);
+          }
+        } catch (e) {}
+      }
+    }, 1500);
 
     let currentStream = null;
     let ws = null;
@@ -1172,6 +1387,19 @@ MOBILE_CLIENT_HTML = """<!DOCTYPE html>
         }
       };
 
+      ws.onmessage = (event) => {
+        try {
+          if (typeof event.data === 'string') {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'record_status') {
+              if (msg.is_recording !== isRecordingAnim) {
+                setRecordingUI(msg.is_recording, msg.saved_frames || 0);
+              }
+            }
+          }
+        } catch (e) {}
+      };
+
       ws.onerror = (e) => {
         console.error('WS Error:', e);
       };
@@ -1285,7 +1513,13 @@ class PhoneStreamServer:
         self.port = port
         self.use_ssl = use_ssl
         self.local_ip = get_local_ip()
-        self.app = FastAPI(title="Karate Motion Studio Mobile Cam Receiver")
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            self.loop = asyncio.get_running_loop()
+            yield
+
+        self.app = FastAPI(title="Karate Motion Studio Mobile Cam Receiver", lifespan=lifespan)
         self._setup_routes()
 
         # Thread-safe storage: camera_id -> (bgr_frame, timestamp, fps)
@@ -1297,6 +1531,14 @@ class PhoneStreamServer:
         self.fps_timers: Dict[str, float] = {}
         self.frame_seq: Dict[str, int] = {}
         self.new_frame_event = threading.Event()
+
+        # Remote Recording Synchronization
+        self.is_recording: bool = False
+        self.record_start_t: float = 0.0
+        self.last_recorded_frames: int = 0
+        self.record_command_handler: Optional[Callable[[str], None]] = None
+        self.active_websockets: Set[WebSocket] = set()
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Callbacks registered by Qt UI
         self.frame_callbacks: List[Callable[[str, np.ndarray, float], None]] = []
@@ -1344,6 +1586,7 @@ class PhoneStreamServer:
         async def get_status():
             with self.lock:
                 cams = list(self.latest_frames.keys())
+            dur = time.time() - self.record_start_t if self.is_recording else 0.0
             return {
                 "server": "Karate Motion Studio Phone Receiver",
                 "ip": self.local_ip,
@@ -1351,48 +1594,137 @@ class PhoneStreamServer:
                 "ssl": self.use_ssl,
                 "url": self.get_connection_url(),
                 "active_cameras": cams,
+                "is_recording": self.is_recording,
+                "recording_duration": round(dur, 2),
+                "last_frames": self.last_recorded_frames,
+            }
+
+        @self.app.post("/api/record/start")
+        async def api_record_start():
+            self.is_recording = True
+            self.record_start_t = time.time()
+            self.dispatch_record_command("start")
+            await self.broadcast_json({"type": "record_status", "is_recording": True})
+            return {"status": "ok", "action": "start"}
+
+        @self.app.post("/api/record/stop")
+        async def api_record_stop():
+            self.is_recording = False
+            self.dispatch_record_command("stop")
+            await asyncio.sleep(0.08)
+            await self.broadcast_json({"type": "record_status", "is_recording": False, "saved_frames": self.last_recorded_frames})
+            return {"status": "ok", "action": "stop", "frames": self.last_recorded_frames}
+
+        @self.app.get("/api/record/status")
+        async def api_record_status():
+            dur = time.time() - self.record_start_t if self.is_recording else 0.0
+            return {
+                "is_recording": self.is_recording,
+                "duration": round(dur, 2),
+                "frames": self.last_recorded_frames,
             }
 
         @self.app.websocket("/ws/stream/{camera_id}")
         async def stream_endpoint(websocket: WebSocket, camera_id: str):
             await websocket.accept()
+            self.active_websockets.add(websocket)
             t_last_fps = time.time()
             c_frames = 0
             cur_fps = 0.0
 
             try:
                 while True:
-                    data = await websocket.receive_bytes()
-                    nparr = np.frombuffer(data, np.uint8)
-                    frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    msg = await websocket.receive()
+                    if "bytes" in msg and msg["bytes"]:
+                        data = msg["bytes"]
+                        nparr = np.frombuffer(data, np.uint8)
+                        frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-                    if frame_bgr is not None:
-                        t_now = time.time()
-                        c_frames += 1
-                        if t_now - t_last_fps >= 1.0:
-                            cur_fps = c_frames / (t_now - t_last_fps)
-                            c_frames = 0
-                            t_last_fps = t_now
+                        if frame_bgr is not None:
+                            t_now = time.time()
+                            c_frames += 1
+                            if t_now - t_last_fps >= 1.0:
+                                cur_fps = c_frames / (t_now - t_last_fps)
+                                c_frames = 0
+                                t_last_fps = t_now
 
-                        with self.lock:
-                            self.latest_frames[camera_id] = frame_bgr
-                            self.frame_timestamps[camera_id] = t_now
-                            self.frame_fps[camera_id] = cur_fps
-                            self.frame_seq[camera_id] = self.frame_seq.get(camera_id, 0) + 1
-                        self.new_frame_event.set()
+                            with self.lock:
+                                self.latest_frames[camera_id] = frame_bgr
+                                self.frame_timestamps[camera_id] = t_now
+                                self.frame_fps[camera_id] = cur_fps
+                                self.frame_seq[camera_id] = self.frame_seq.get(camera_id, 0) + 1
+                            self.new_frame_event.set()
 
-                        # Dispatch callback
-                        for cb in self.frame_callbacks:
-                            try:
-                                cb(camera_id, frame_bgr, cur_fps)
-                            except Exception:
-                                pass
+                            # Dispatch callback
+                            for cb in self.frame_callbacks:
+                                try:
+                                    cb(camera_id, frame_bgr, cur_fps)
+                                except Exception:
+                                    pass
+                    elif "text" in msg and msg["text"]:
+                        try:
+                            cmd = json.loads(msg["text"])
+                            action = cmd.get("action")
+                            if action == "start_recording":
+                                self.is_recording = True
+                                self.record_start_t = time.time()
+                                self.dispatch_record_command("start")
+                                await self.broadcast_json({"type": "record_status", "is_recording": True})
+                            elif action == "stop_recording":
+                                self.is_recording = False
+                                self.dispatch_record_command("stop")
+                                await asyncio.sleep(0.08)
+                                await self.broadcast_json({"type": "record_status", "is_recording": False, "saved_frames": self.last_recorded_frames})
+                        except Exception:
+                            pass
             except WebSocketDisconnect:
                 pass
             finally:
+                self.active_websockets.discard(websocket)
                 with self.lock:
                     if camera_id in self.latest_frames:
                         del self.latest_frames[camera_id]
+
+    async def broadcast_json(self, data: dict):
+        text = json.dumps(data)
+        to_remove = set()
+        for ws in list(self.active_websockets):
+            try:
+                await ws.send_text(text)
+            except Exception:
+                to_remove.add(ws)
+        self.active_websockets -= to_remove
+
+    def set_record_command_handler(self, handler: Callable[[str], None]):
+        """Sets callback invoked when mobile user requests start/stop recording."""
+        self.record_command_handler = handler
+
+    def dispatch_record_command(self, action: str):
+        if self.record_command_handler:
+            try:
+                self.record_command_handler(action)
+            except Exception:
+                pass
+
+    def notify_recording_finished(self, frame_count: int):
+        """Called by Qt main window when recording completes and animation is baked."""
+        self.is_recording = False
+        self.last_recorded_frames = frame_count
+        if self.loop and self.loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self.broadcast_json({"type": "record_status", "is_recording": False, "saved_frames": frame_count}),
+                self.loop
+            )
+
+    def notify_recording_started(self):
+        """Called by Qt main window when recording starts from PC UI."""
+        self.is_recording = True
+        self.record_start_t = time.time()
+        if self.loop and self.loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self.broadcast_json({"type": "record_status", "is_recording": True}),
+                self.loop
+            )
 
     def register_frame_callback(self, cb: Callable[[str, np.ndarray, float], None]):
         """Registers a listener for newly received phone camera frames."""

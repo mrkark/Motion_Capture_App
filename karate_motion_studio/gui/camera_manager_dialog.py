@@ -48,8 +48,8 @@ class CameraManagerDialog(QtWidgets.QDialog):
         layout.addWidget(lbl_title)
 
         lbl_desc = QtWidgets.QLabel(
-            "Для точного захвата движений и глубоких стоек карате (Дзенкуцу-дати, Киба-дати) "
-            "рекомендуется использовать смартфон на штативе во весь рост или 2 камеры (спереди и сбоку)."
+            "Встроенная веб-камера ноутбука отключена для обеспечения высокой точности спортивного захвата движений. "
+            "Для записи стоек (Дзенкуцу, Киба-дати) и ударов карате подключите 1 или 2 смартфона во весь рост по Wi-Fi."
         )
         lbl_desc.setWordWrap(True)
         lbl_desc.setStyleSheet("color: #a4b0be; font-size: 9.5pt;")
@@ -66,17 +66,12 @@ class CameraManagerDialog(QtWidgets.QDialog):
         # Tab 1: Phone QR Code (Zero install)
         tab_qr = QtWidgets.QWidget()
         self._setup_tab_qr(tab_qr)
-        tabs.addTab(tab_qr, "📱 Смартфон (QR-код)")
+        tabs.addTab(tab_qr, "📱 Смартфоны (QR-код)")
 
         # Tab 2: IP Webcam / DroidCam
         tab_ip = QtWidgets.QWidget()
         self._setup_tab_ip(tab_ip)
-        tabs.addTab(tab_ip, "🌐 IP-камера / RTSP / DroidCam")
-
-        # Tab 3: PC Webcams
-        tab_pc = QtWidgets.QWidget()
-        self._setup_tab_pc(tab_pc)
-        tabs.addTab(tab_pc, "💻 Веб-камеры ПК")
+        tabs.addTab(tab_ip, "🌐 IP-камера смартфона / RTSP")
 
         layout.addWidget(tabs)
 
@@ -85,28 +80,24 @@ class CameraManagerDialog(QtWidgets.QDialog):
         box_active.setStyleSheet("QGroupBox { font-weight: bold; color: #ff6b81; border: 1px solid #3c404c; border-radius: 6px; margin-top: 10px; padding-top: 14px; }")
         layout_active = QtWidgets.QHBoxLayout(box_active)
 
-        self.btn_use_phone1 = QtWidgets.QRadioButton("📱 Телефон 1 (Фронт)")
-        self.btn_use_phone2 = QtWidgets.QRadioButton("📱 Телефон 2 (Сбоку)")
-        self.btn_use_dual = QtWidgets.QRadioButton("🔀 Две камеры (Сплит)")
-        self.btn_use_pc = QtWidgets.QRadioButton("💻 Веб-камера ПК")
+        self.btn_use_phone1 = QtWidgets.QRadioButton("📱 Телефон 1 (Фронт — лицо/корпус)")
+        self.btn_use_phone2 = QtWidgets.QRadioButton("📱 Телефон 2 (Сбоку — профиль/глубина)")
+        self.btn_use_dual = QtWidgets.QRadioButton("🔀 Две камеры смартфонов (Синхронный 3D)")
         self.btn_use_ip = QtWidgets.QRadioButton("🌐 IP-поток")
 
         # Select matching radio
-        if self.active_source == "phone:cam1":
-            self.btn_use_phone1.setChecked(True)
-        elif self.active_source == "phone:cam2":
+        if self.active_source == "phone:cam2":
             self.btn_use_phone2.setChecked(True)
         elif self.active_source.startswith("dual"):
             self.btn_use_dual.setChecked(True)
         elif self.active_source.startswith("http") or self.active_source.startswith("rtsp"):
             self.btn_use_ip.setChecked(True)
         else:
-            self.btn_use_pc.setChecked(True)
+            self.btn_use_phone1.setChecked(True)
 
         layout_active.addWidget(self.btn_use_phone1)
         layout_active.addWidget(self.btn_use_phone2)
         layout_active.addWidget(self.btn_use_dual)
-        layout_active.addWidget(self.btn_use_pc)
         layout_active.addWidget(self.btn_use_ip)
         layout.addWidget(box_active)
 
@@ -261,27 +252,6 @@ class CameraManagerDialog(QtWidgets.QDialog):
         layout.addWidget(self.lbl_test_result)
         layout.addStretch()
 
-    def _setup_tab_pc(self, parent: QtWidgets.QWidget):
-        layout = QtWidgets.QVBoxLayout(parent)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        lbl_info = QtWidgets.QLabel("Выбор встроенной или USB веб-камеры компьютера:")
-        layout.addWidget(lbl_info)
-
-        self.combo_pc_cam = QtWidgets.QComboBox()
-        for i in range(4):
-            self.combo_pc_cam.addItem(f"Камера #{i} (USB / Встроенная)", i)
-        try:
-            curr_idx = int(self.active_source)
-            self.combo_pc_cam.setCurrentIndex(curr_idx)
-        except ValueError:
-            self.combo_pc_cam.setCurrentIndex(0)
-
-        self.combo_pc_cam.setStyleSheet("padding: 6px; font-size: 10pt;")
-        layout.addWidget(self.combo_pc_cam)
-        layout.addStretch()
-
     def _update_qr_image(self):
         try:
             # QR for Cam 1
@@ -341,16 +311,14 @@ class CameraManagerDialog(QtWidgets.QDialog):
         self.lbl_test_result.setText("<span style='color: #ff4757;'>Не удалось подключиться к видеопотоку. Проверьте IP и порт.</span>")
 
     def _on_accept(self):
-        if self.btn_use_phone1.isChecked():
-            chosen = "phone:cam1"
-        elif self.btn_use_phone2.isChecked():
+        if self.btn_use_phone2.isChecked():
             chosen = "phone:cam2"
         elif self.btn_use_dual.isChecked():
             chosen = "dual:phone+phone"
         elif self.btn_use_ip.isChecked():
             chosen = self.edit_ip_url.text().strip() or "phone:cam1"
         else:
-            chosen = str(self.combo_pc_cam.currentData())
+            chosen = "phone:cam1"
 
         self.active_source = chosen
         self.cameraSelected.emit(chosen)

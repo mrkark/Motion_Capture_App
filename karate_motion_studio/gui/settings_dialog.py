@@ -42,15 +42,16 @@ class SettingsDialog(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout()
         form.setSpacing(10)
 
-        # Camera Index
-        self.spn_camera = QtWidgets.QSpinBox()
-        self.spn_camera.setRange(0, 8)
-        self.spn_camera.setValue(0)
-        form.addRow("Индекс веб-камеры:", self.spn_camera)
+        # Camera Selection
+        self.combo_cam_default = QtWidgets.QComboBox()
+        self.combo_cam_default.addItem("📱 Телефон 1 (Фронт — лицо/корпус)", "phone:cam1")
+        self.combo_cam_default.addItem("📱 Телефон 2 (Сбоку — глубина стоек)", "phone:cam2")
+        self.combo_cam_default.addItem("🔀 Две камеры смартфонов (Синхронный 3D)", "dual:phone+phone")
+        form.addRow("Камера по умолчанию:", self.combo_cam_default)
 
         # Mirror mode
-        self.chk_mirror = QtWidgets.QCheckBox("Зеркальный режим для веб-камеры")
-        self.chk_mirror.setChecked(True)
+        self.chk_mirror = QtWidgets.QCheckBox("Зеркальный режим для селфи-камеры")
+        self.chk_mirror.setChecked(False)
         form.addRow("Зеркало:", self.chk_mirror)
 
         # Track Hands
@@ -104,7 +105,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def get_settings(self) -> dict:
         return {
-            "camera_index": self.spn_camera.value(),
+            "camera_source": self.combo_cam_default.currentData(),
+            "camera_index": 0,
             "mirror": self.chk_mirror.isChecked(),
             "track_hands": self.chk_hands.isChecked(),
             "blender_exe": self.txt_blender.text().strip(),

@@ -42,6 +42,7 @@ def draw_text_utf8(
     font_size: int = 16,
     color_bgr: Tuple[int, int, int] = (255, 255, 255),
     bold: bool = True,
+    color: Optional[Tuple[int, int, int]] = None,
 ) -> np.ndarray:
     """
     Renders UTF-8 text (including Russian/Cyrillic) onto an OpenCV BGR image in-place.
@@ -49,6 +50,9 @@ def draw_text_utf8(
     """
     if not text:
         return img
+
+    if color is not None:
+        color_bgr = color
 
     h, w = img.shape[:2]
     x, y = pos
@@ -85,10 +89,21 @@ def draw_badge_utf8(
     bg_color_bgr: Tuple[int, int, int] = (18, 22, 32),
     dot_color_bgr: Optional[Tuple[int, int, int]] = None,
     font_size: int = 15,
+    badge_color: Optional[Tuple[int, int, int]] = None,
+    border_color: Optional[Tuple[int, int, int]] = None,
 ) -> np.ndarray:
     """
     Draws a styled, anti-aliased HUD status badge with a colored indicator dot and Cyrillic title.
+    Supports badge_color and border_color keyword arguments.
     """
+    if badge_color is not None:
+        border_color_bgr = badge_color
+    elif border_color is not None:
+        border_color_bgr = border_color
+
+    if dot_color_bgr is None:
+        dot_color_bgr = border_color_bgr
+
     x, y = top_left
     font = get_font(font_size, bold=True)
     bbox = font.getbbox(text)
