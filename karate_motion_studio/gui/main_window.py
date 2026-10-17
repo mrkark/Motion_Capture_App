@@ -249,6 +249,7 @@ class WebcamCaptureThread(QtCore.QThread):
                     raw_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
                     cv2.rectangle(raw_frame, (20, 20), (1260, 700), (45, 48, 56), 2)
                     url_str = self.phone_server.get_connection_url(cam_id) if self.phone_server else "http://..."
+                    target_role = "Камера 1 (Фронт — лицо/корпус)" if cam_id == "cam1" else "Камера 2 (Сбоку — профиль/глубина)"
                     draw_text_utf8(raw_frame, "KARATE MOTION STUDIO - ПОДКЛЮЧЕНИЕ ТЕЛЕФОНА", (300, 200), font_size=24, color=(255, 71, 87))
                     draw_text_utf8(raw_frame, "Встроенная веб-камера ноутбука отключена для чистоты 3D трекинга.", (280, 250), font_size=18, color=(200, 205, 215))
                     draw_text_utf8(raw_frame, f"Ожидание подключения: {target_role}", (360, 300), font_size=20, color=(220, 220, 220))
